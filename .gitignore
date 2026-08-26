@@ -1,0 +1,20 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- PyInstaller (exe banavva nu kachru) ----
+build/
+dist/
+*.spec
+
+# ---- program pote banave chhe te ----
+automation.log
+config.json.tmp
+
+# ---- Windows ----
+Thumbs.db
+desktop.ini
+*.lnk

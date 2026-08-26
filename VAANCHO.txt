@@ -1,0 +1,67 @@
+========================================================================
+        MIDAS M32  --  AUTO FX MUTE
+        (Python ni jarur nathi -- ek j file)
+========================================================================
+
+CHALU KARVA :  M32-AutoFX.exe  par double-click.  Bas.
+
+Aa EK J FILE ne gme tya copy karo -- pen drive ma, bija PC ma,
+gme tya. Pehli var chalavo etle baaki ni badhi file
+(config.json, guide) JATE tени bajuma bani jashe.
+
+
+-------------------------------------------------------------
+PEHLI VAR VAAPRO TYARE
+-------------------------------------------------------------
+
+  1. LAN cable mixer na REMOTE port ma ane PC ma bharavo
+  2. M32-AutoFX.exe kholo
+  3. "Network ma shodho" dabavo -- mixer jate mali jashe
+  4. Dabi baju je mic sambhalva hoy tena par tick karo
+  5. Jamni baju thi nakki karo shu chalu/band karvu
+     (Mute Group 5 pehlethi set chhe)
+  6. TEST dabavi ne mixer ni screen par check karo
+  7. Badhu barabar lage to  CHALU KARO  dabavo
+
+
+-------------------------------------------------------------
+MIXER NA HOY TO PAN CHALSE
+-------------------------------------------------------------
+
+  M32-AutoFX.exe gui --sim
+
+  Nakli M32 andar j chalu thai jashe. Nakli kalakaar gata
+  dekhashe: CH 1 Guruji, CH 2 Vocal 2, CH 4 Tabla, CH 5 Flute.
+
+
+-------------------------------------------------------------
+BIJA TOOL (CMD ma)
+-------------------------------------------------------------
+
+  M32-AutoFX.exe tools           badhi yaadi batave
+  M32-AutoFX.exe run             CMD ma automation chalavo
+  M32-AutoFX.exe find            network ma mixer shodho
+  M32-AutoFX.exe select 1,5,9    channel 1, 5, 9 pasand karo
+  M32-AutoFX.exe scan            bolo etle channel jate shodhe
+  M32-AutoFX.exe testfx          3 var on/off kari ne check karo
+  M32-AutoFX.exe test            badha test chalavo (mixer vagar)
+  M32-AutoFX.exe sim             fakt nakli mixer chalavo
+
+
+-------------------------------------------------------------
+DHYAN RAKHO
+-------------------------------------------------------------
+
+  * GUI kholo etle turat meter dekhashe, PAN "CHALU KARO"
+    dabavo tya sudhi MIXER PAR KAI J NAHI THAY.
+    Etle live program vakhte pan salamat rite kholi shakay.
+
+  * Antivirus kyarek navu .exe ne roke chhe (PyInstaller thi
+    banela badha exe sathe aavu thay chhe). "Allow" / "Keep"
+    dabavo, athva antivirus ma aa folder ne chhut aapo.
+
+  * PC band thay to automation band thai jashe, pan mixer
+    jem chhe tem chalu rahe chhe. Vadhare mahiti mate
+    JAVAB-TAMARA-SAVAL.txt vancho.
+
+========================================================================

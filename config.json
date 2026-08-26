@@ -1,0 +1,24 @@
+{
+  "_comment_1": "==== MIXER CONNECTION ====",
+  "mixer_ip": "192.168.45.100",
+  "mixer_port": 10023,
+  "_comment_2": "==== METER (kaya channel nu awaaj sambhalvu) ====",
+  "meter_bank": 0,
+  "meter_index": 0,
+  "meter_note": "ek channel: 0  |  ghani channel: [0, 1, 4]  (0=CH1, 1=CH2, 4=CH5). 2-METER-SCAN.bat aapoaap bhare chhe.",
+  "_comment_3": "==== SENSITIVITY ====",
+  "threshold_db": -40.0,
+  "hold_time": 1.5,
+  "attack_time": 0.02,
+  "_comment_4": "==== SHU MUTE KARVU (Mute Group 5) ====",
+  "fx_targets": [
+    "/config/mute/5"
+  ],
+  "_comment_5": "==== OTHER ====",
+  "start_muted": true,
+  "mute_on_exit": true,
+  "show_meter": true,
+  "log_file": "automation.log",
+  "invert": "auto",
+  "invert_note": "auto = /config/mute/... mate ulti value aapoaap (1=mute, 0=unmute)"
+}
