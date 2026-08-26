@@ -15,6 +15,7 @@
 | 07 | [07-exe-build.md](07-exe-build.md) | .exe બનાવવું |
 | 08 | [08-osc-protocol.md](08-osc-protocol.md) | મિક્સરની ભાષા (OSC) |
 | 09 | [09-troubleshooting.md](09-troubleshooting.md) | **પ્રોબ્લેમ આવે તો** |
+| 10 | [10-fader-aware.md](10-fader-aware.md) | **Fader / Mute ધ્યાનમાં લેવું** |
 
 ## ફાઈલોનો નકશો
 

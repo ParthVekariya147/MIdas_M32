@@ -202,7 +202,8 @@ class App:
                    command=lambda: self._set_all_channels(False)).pack(side="left")
         ttk.Button(bar, text="Naam fari vancho",
                    command=self.refresh_names).pack(side="left", padx=6)
-        ttk.Label(bar, text="toggle CHALU = te mic sambhalse",
+        ttk.Label(bar, text="toggle CHALU = te mic sambhalse   |   "
+                       "FADER niche ke MUTE hoy to te mic ganatri ma nahi le",
                   style="Dim.TLabel").pack(side="left", padx=6)
 
         canvas = tk.Canvas(box, bg=BG, highlightthickness=0)
@@ -219,11 +220,12 @@ class App:
 
         hdr = ttk.Frame(inner)
         hdr.grid(row=0, column=0, sticky="w", pady=(0, 2))
-        for text, w in (("ON/OFF", 9), ("CH", 4), ("NAAM", 15),
-                        ("LEVEL", 14), ("dB", 7)):
+        for text, w in (("ON/OFF", 9), ("CH", 4), ("NAAM", 14),
+                        ("LEVEL", 14), ("dB", 7), ("FADER", 8)):
             ttk.Label(hdr, text=text, width=w, style="Dim.TLabel").pack(side="left")
 
-        self.ch_vars, self.ch_names, self.ch_bars, self.ch_dbs = {}, {}, {}, {}
+        self.ch_vars, self.ch_names, self.ch_bars = {}, {}, {}
+        self.ch_dbs, self.ch_faders = {}, {}
         for ch in range(1, NUM_CHANNELS + 1):
             row = ttk.Frame(inner)
             row.grid(row=ch, column=0, sticky="w", pady=1)
@@ -234,7 +236,7 @@ class App:
                    width=38, height=19).pack(side="left", padx=(4, 12))
 
             ttk.Label(row, text="%d" % ch, width=4).pack(side="left")
-            nm = ttk.Label(row, text="-", width=15, anchor="w", style="Dim.TLabel")
+            nm = ttk.Label(row, text="-", width=14, anchor="w", style="Dim.TLabel")
             nm.pack(side="left")
             self.ch_names[ch] = nm
 
@@ -242,9 +244,13 @@ class App:
             b.pack(side="left", padx=4)
             self.ch_bars[ch] = b
 
-            db = ttk.Label(row, text="", width=8, anchor="e", style="Dim.TLabel")
+            db = ttk.Label(row, text="", width=7, anchor="e", style="Dim.TLabel")
             db.pack(side="left")
             self.ch_dbs[ch] = db
+
+            fd = ttk.Label(row, text="", width=9, anchor="e", style="Dim.TLabel")
+            fd.pack(side="left", padx=(6, 0))
+            self.ch_faders[ch] = fd
 
     # ---------------------------------------------- targets
     def _build_targets(self, parent):
@@ -667,18 +673,38 @@ class App:
             self._refresh_targets()
 
         th = self.th_var.get()
+        respect = self.feat_vars.get("respect_fader")
+        use_eff = (respect is None or respect.get()) and "levels_eff" in s
+        state = s.get("ch_state") or {}
+
         show = self.feat_vars.get("show_meter")
         if show is None or show.get():
             for ch in range(1, NUM_CHANNELS + 1):
-                db = s["levels"][ch - 1]
+                raw = s["levels"][ch - 1]
+                db = s["levels_eff"][ch - 1] if use_eff else raw
                 self.ch_bars[ch].set(db, th)
                 self.ch_dbs[ch].configure(text="%.0f" % db if db > -90 else "--",
                                           foreground=GREEN if db > th else DIM)
+
+                txt = state.get(ch, "")
+                if not use_eff:
+                    txt = ""
+                dead = txt in ("MUTE", "-oo")
+                self.ch_faders[ch].configure(
+                    text=txt,
+                    foreground=RED if dead else (DIM if txt in ("", "+0.0")
+                                                else "#e0c040"))
+                self.ch_names[ch].configure(
+                    foreground=DIM if dead else
+                    (FG if self.names.get(ch) else DIM))
             self.lvl_lbl.configure(
                 text="%6.1f dB  %s" % (s["level_db"],
                                        core.channel_names([s["active_index"]])))
         else:
             self.lvl_lbl.configure(text="meter band")
+
+        if use_eff and not s.get("state_ready", True):
+            self.lvl_lbl.configure(text="fader ni raah...")
 
         if not s["active"]:
             self.fx_lbl.configure(text="FX: (jova mate)", foreground=DIM)

@@ -109,13 +109,19 @@ class Simulator(threading.Thread):
         self.received = []             # test mate: [(path, value), ...]
         self.start_time = 0.0
 
-        # badhu chalu (1) thi shuru
+        # badhu chalu (1) thi shuru, fader unity (0.75 = 0 dB)
         for ch in range(1, NUM_CHANNELS + 1):
             self.state["/ch/%02d/mix/on" % ch] = 1
+            self.state["/ch/%02d/mix/fader" % ch] = 0.75
+            self.state["/ch/%02d/grp/dca" % ch] = 0
+            self.state["/ch/%02d/grp/mute" % ch] = 0
         for fx in range(1, 9):
             self.state["/fxrtn/%02d/mix/on" % fx] = 1
         for g in range(1, 7):
             self.state["/config/mute/%d" % g] = 0
+        for n in range(1, 9):
+            self.state["/dca/%d/on" % n] = 1
+            self.state["/dca/%d/fader" % n] = 0.75
 
     # ------------------------------------------------------------ helpers
     def say(self, msg):
@@ -150,6 +156,9 @@ class Simulator(threading.Thread):
             # group CHALU (1) = teni andar na channel MUTE (0)
             for member in MUTE_GROUP_MEMBERS.get(g, []):
                 self.state[member] = 0 if value in (1, True) else 1
+
+        if "/fader" in path or "/grp/" in path:
+            return                       # aa log ma na batavo (bahu aave)
 
         if old != value:
             if path.startswith("/config/mute/"):
@@ -198,8 +207,12 @@ class Simulator(threading.Thread):
         if args:
             self._set_state(address, args[0])
         elif address in self.state:
-            self.sock.sendto(osc_lite.build_message(
-                address, int(self.state[address])), src)
+            value = self.state[address]
+            if isinstance(value, float):
+                reply = osc_lite.build_message(address, value)
+            else:
+                reply = osc_lite.build_message(address, int(value))
+            self.sock.sendto(reply, src)
 
     # ------------------------------------------------------------ run
     def run(self):

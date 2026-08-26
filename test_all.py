@@ -152,6 +152,21 @@ def test_features():
           str(core.enabled_targets(cfg)))
 
 
+# ================================================================ 3c. fader
+def test_fader():
+    section("3c. Fader ni ganatri")
+    pairs = [(1.0, 10.0), (0.75, 0.0), (0.5, -10.0), (0.25, -30.0),
+             (0.0625, -60.0), (0.0, -90.0)]
+    for value, want in pairs:
+        got = core.fader_to_db(value)
+        check("fader %-6s = %+.0f dB" % (value, want), abs(got - want) < 0.1,
+              "%.1f" % got)
+    check("khoto data thi crash na thay",
+          core.fader_to_db(None) == -90.0 and core.fader_to_db("abc") == -90.0)
+    check("fader 0 nu lakhan '-oo'", core.fader_text(0.0) == "-oo")
+    check("fader unity nu lakhan '+0.0'", core.fader_text(0.75) == "+0.0")
+
+
 # ================================================================ 4. live
 def run_engine(sim, cfg_extra, seconds, active=True):
     """Nakli mixer sathe engine chalavi ne shu thayu te pachhu aape."""
@@ -284,6 +299,54 @@ def test_live():
         check("Band karta mute toggle chalu: mute jay", after == [1],
               "malyu: %s" % after)
 
+        # ---------------- FADER / MUTE dhyanma ----------------
+        def set_ch1(**kw):
+            for key, val in kw.items():
+                sim._set_state("/ch/01/" + key.replace("_", "/"), val)
+
+        set_ch1(mix_fader=0.75, mix_on=1, grp_dca=0, grp_mute=0)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"]}, 8.0)
+        check("Fader uncho -> chalu thay",
+              any("MIC ON" in m for m in logs), eng.channel_state_text(1))
+
+        set_ch1(mix_fader=0.0)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"]}, 8.0)
+        check("Fader SAV NICHE -> chalu na thay",
+              not any("MIC ON" in m for m in logs), eng.channel_state_text(1))
+
+        set_ch1(mix_fader=0.75, mix_on=0)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"]}, 8.0)
+        check("Channel MUTE -> chalu na thay",
+              not any("MIC ON" in m for m in logs), eng.channel_state_text(1))
+
+        set_ch1(mix_on=1, grp_dca=1)
+        sim._set_state("/dca/1/on", 0)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"]}, 8.0)
+        check("DCA band -> chalu na thay",
+              not any("MIC ON" in m for m in logs), eng.channel_state_text(1))
+        sim._set_state("/dca/1/on", 1)
+
+        set_ch1(grp_dca=0, grp_mute=2)
+        sim._set_state("/config/mute/2", 1)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"]}, 8.0)
+        check("Mute group chalu -> chalu na thay",
+              not any("MIC ON" in m for m in logs), eng.channel_state_text(1))
+        sim._set_state("/config/mute/2", 0)
+
+        # toggle band karo to juni rite chale
+        set_ch1(grp_mute=0, mix_fader=0.0)
+        eng, logs = run_engine(sim, {"meter_index": 0,
+                                     "fx_targets": ["/config/mute/1"],
+                                     "features": {"respect_fader": False}}, 8.0)
+        check("toggle band -> fader dhyanma na le",
+              any("MIC ON" in m for m in logs))
+        set_ch1(mix_fader=0.75)
+
         # ---------------- ghani channel ----------------
         # CH 4 (tabla, jaldi jaldi) + CH 9 (playback, haméshaa chalu)
         eng, logs = run_engine(sim, {"meter_index": [3, 8],
@@ -386,6 +449,9 @@ def test_gui():
 
         app.run_var.set(False)
         app._update_run_label()
+        check("dareki channel no FADER khano chhe",
+              len(app.ch_faders) == 32)
+
         check("MOTO automation toggle chhe",
               hasattr(app, "run_toggle") and hasattr(app, "run_var"))
 
@@ -404,7 +470,7 @@ def main():
     print(LINE)
 
     start = time.time()
-    for fn in (test_osc, test_db, test_config, test_features,
+    for fn in (test_osc, test_db, test_config, test_features, test_fader,
                test_live, test_gui):
         try:
             fn()

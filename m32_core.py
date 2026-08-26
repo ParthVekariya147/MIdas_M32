@@ -47,6 +47,10 @@ FEATURES = {
         "Auto FX Mute",
         "Awaaj aave to target chalu, shanti thay to band",
         True),
+    "respect_fader": (
+        "Fader / Mute dhyanma lo",
+        "Fader niche hoy ke channel mute hoy to te mic na ganvo",
+        True),
     "safe_mode": (
         "Safe Mode (test)",
         "Mixer ne KAI command na moklo -- fakt screen par batavo",
@@ -336,6 +340,44 @@ def to_db(value: float) -> float:
         return -128.0
     db = 20.0 * math.log10(value)
     return db if db > -128.0 else -128.0
+
+
+def fader_to_db(value):
+    """
+    X32/M32 no fader 0.0 thi 1.0 no float ape chhe.
+    Tene dB ma feravé chhe (mixer ni potani ganatri pramane).
+
+        1.00  ->  +10 dB
+        0.75  ->    0 dB   (unity -- fader sidho uncho)
+        0.50  ->  -10 dB
+        0.25  ->  -30 dB
+        0.0625 -> -60 dB
+        0.00  ->  -90 dB   (sav niche = -oo)
+    """
+    if value is None:
+        return -90.0
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return -90.0
+    f = max(0.0, min(1.0, f))
+    if f >= 0.5:
+        return f * 40.0 - 30.0
+    if f >= 0.25:
+        return f * 80.0 - 50.0
+    if f >= 0.0625:
+        return f * 160.0 - 70.0
+    if f > 0.0:
+        return f * 480.0 - 90.0
+    return -90.0
+
+
+def fader_text(value):
+    """Fader ni halat manas vanchi shake tevi."""
+    db = fader_to_db(value)
+    if db <= -89.0:
+        return "-oo"
+    return "%+.1f" % db
 
 
 def db_bar(db: float, width: int = 24) -> str:

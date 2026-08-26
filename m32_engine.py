@@ -63,7 +63,24 @@ class Engine(threading.Thread):
         self.mixer_name = ""
         self.mixer_fw = ""
         self.names = {}                       # {channel_no: naam}
-        self.levels = [-128.0] * NUM_CHANNELS
+
+        # ---- channel ni halat (fader / mute / DCA / mute group) ----
+        self.ch_fader = {}      # ch -> 0.0-1.0
+        self.ch_on = {}         # ch -> 1 chalu / 0 mute
+        self.ch_dca = {}        # ch -> bitmask (kaya DCA ma chhe)
+        self.ch_mgrp = {}       # ch -> bitmask (kaya mute group ma chhe)
+        self.dca_on = {}        # 1-8 -> 1/0
+        self.dca_fader = {}     # 1-8 -> 0.0-1.0
+        self.mgrp_on = {}       # 1-6 -> 1/0
+        self._last_state_poll = 0.0
+        self._last_full_poll = 0.0
+        # mixer e fader ni mahiti aapi ke nahi -- khabar na hoy tya sudhi
+        # koi pan channel ne "sambhalay chhe" na manvu (salamati mate)
+        self._state_ready = False
+        self._state_asked_at = 0.0
+        self._state_gaveup = False
+        self.levels = [-128.0] * NUM_CHANNELS       # mic no kacho awaaj
+        self.levels_eff = [-128.0] * NUM_CHANNELS   # fader lagavya pachhi no
         self.level_db = -128.0
         self.active_index = self.indexes[0]
         self.fx_on = None
@@ -172,6 +189,74 @@ class Engine(threading.Thread):
         if self.mixer:
             self.mixer.send(path, value)
 
+    # ------------------------------------------------------------ fader
+    def channel_gain_db(self, ch):
+        """
+        Aa channel no awaaj mixer ma KETLO bahar jay chhe.
+
+        Return: dB ma vadharo/ghatado  (0 = fader unity)
+                None = sav band chhe (mute / mute group / DCA off)
+
+        Mixer meter PRE-FADER ape chhe, etle fader ni asar
+        aapne jate ganvi pade chhe.
+        """
+        # 0) haju mixer e aa channel ni mahiti aapi j nathi?
+        #    to teno bharoso na karvo -- "band chhe" evu manvu.
+        #    (mixer jawab j na aape to _state_gaveup thai jay ane
+        #     juni rite chale)
+        if not self._state_gaveup and ch not in self.ch_fader:
+            return None
+
+        # 1) channel pote mute chhe?
+        if self.ch_on.get(ch, 1) in (0, False):
+            return None
+
+        # 2) je mute group ma chhe te chalu chhe?
+        mgrp = int(self.ch_mgrp.get(ch, 0) or 0)
+        for n in range(1, 7):
+            if mgrp & (1 << (n - 1)) and self.mgrp_on.get(n, 0) in (1, True):
+                return None
+
+        gain = core.fader_to_db(self.ch_fader.get(ch, 0.75))
+
+        # 3) je DCA ma chhe te band chhe? nahi to teno fader umero
+        dca = int(self.ch_dca.get(ch, 0) or 0)
+        for n in range(1, 9):
+            if dca & (1 << (n - 1)):
+                if self.dca_on.get(n, 1) in (0, False):
+                    return None
+                gain += core.fader_to_db(self.dca_fader.get(n, 0.75))
+
+        return gain
+
+    def channel_state_text(self, ch):
+        """GUI ne batavva mate: "+0.0" / "-10.5" / "MUTE" """
+        gain = self.channel_gain_db(ch)
+        if gain is None:
+            return "MUTE"
+        if gain <= -89.0:
+            return "-oo"
+        return "%+.1f" % gain
+
+    # ------------------------------------------------------------ poll
+    def _poll_channel_state(self, channels):
+        """Aa channel na fader / mute / DCA puchho."""
+        for ch in channels:
+            for path in ("/ch/%02d/mix/fader", "/ch/%02d/mix/on",
+                         "/ch/%02d/grp/dca", "/ch/%02d/grp/mute"):
+                self.mixer.send(path % ch)
+                time.sleep(0.002)
+
+    def _poll_groups(self):
+        """DCA ane mute group ni halat puchho."""
+        for n in range(1, 9):
+            self.mixer.send("/dca/%d/on" % n)
+            self.mixer.send("/dca/%d/fader" % n)
+            time.sleep(0.002)
+        for n in range(1, 7):
+            self.mixer.send("/config/mute/%d" % n)
+            time.sleep(0.002)
+
     # ------------------------------------------------------------ packets
     def _on_packet(self, address, args):
         # ---- channel na naam ----
@@ -182,6 +267,46 @@ class Engine(threading.Thread):
                 return
             if args and isinstance(args[0], str):
                 self.names[ch] = args[0].strip()
+            return
+
+        # ---- fader / mute / DCA / mute group na jawab ----
+        if address.startswith("/ch/") and args:
+            parts = address.split("/")
+            if len(parts) >= 5:
+                try:
+                    ch = int(parts[2])
+                except ValueError:
+                    return
+                tail = "/".join(parts[3:])
+                val = args[0]
+                if tail == "mix/fader":
+                    self.ch_fader[ch] = val
+                    self._state_ready = True
+                elif tail == "mix/on":
+                    self.ch_on[ch] = val
+                elif tail == "grp/dca":
+                    self.ch_dca[ch] = val
+                elif tail == "grp/mute":
+                    self.ch_mgrp[ch] = val
+            return
+
+        if address.startswith("/dca/") and args:
+            parts = address.split("/")
+            try:
+                n = int(parts[2])
+            except (ValueError, IndexError):
+                return
+            if address.endswith("/on"):
+                self.dca_on[n] = args[0]
+            elif address.endswith("/fader"):
+                self.dca_fader[n] = args[0]
+            return
+
+        if address.startswith("/config/mute/") and args:
+            try:
+                self.mgrp_on[int(address.rsplit("/", 1)[1])] = args[0]
+            except ValueError:
+                pass
             return
 
         if address != self._meter_address:
@@ -199,17 +324,26 @@ class Engine(threading.Thread):
             self._warned_no_data = False
             self.value_count = len(values)
 
+            respect = self.feature("respect_fader")
+
             # badhi 32 channel na level (GUI ne batavva mate)
             for i in range(min(NUM_CHANNELS, len(values))):
-                self.levels[i] = core.to_db(values[i])
+                raw = core.to_db(values[i])
+                self.levels[i] = raw
+                if respect:
+                    gain = self.channel_gain_db(i + 1)
+                    self.levels_eff[i] = -128.0 if gain is None else raw + gain
+                else:
+                    self.levels_eff[i] = raw
 
             # pasand karel channel ma sauthi motho awaaj
+            # (fader niche hoy ke mute hoy te channel ganvo j nahi)
             with self._lock:
                 indexes = list(self.indexes)
             best_db, best_i = -128.0, None
             for i in indexes:
                 if i < len(values):
-                    db = core.to_db(values[i])
+                    db = self.levels_eff[i] if respect else core.to_db(values[i])
                     if db > best_db:
                         best_db, best_i = db, i
 
@@ -283,6 +417,10 @@ class Engine(threading.Thread):
             "active": self.active,
             "features": dict(self.features),
             "levels": list(self.levels),
+            "levels_eff": list(self.levels_eff),
+            "state_ready": self._state_ready or self._state_gaveup,
+            "ch_state": {ch: self.channel_state_text(ch)
+                         for ch in range(1, NUM_CHANNELS + 1)},
             "level_db": self.level_db,
             "active_index": self.active_index,
             "fx_on": self.fx_on,
@@ -305,6 +443,11 @@ class Engine(threading.Thread):
             self.on_log("[!] Mixer jawab nathi aapto -- IP/cable check karo")
 
         self._fetch_names()
+        self._state_asked_at = time.time()
+        self._poll_channel_state(range(1, NUM_CHANNELS + 1))
+        self._poll_groups()
+        self._last_full_poll = time.time()
+        self._last_state_poll = time.time()
         self.mixer.subscribe_meters([self.bank])
         self.last_packet = time.time()
 
@@ -319,6 +462,28 @@ class Engine(threading.Thread):
                 self._fetch_names()
 
             now = time.time()
+
+            # mixer fader ni mahiti aapto j nathi? (juno firmware / bijo desk)
+            # to 4 second raah joi ne juni rite chalu rakho.
+            if (self.feature("respect_fader") and not self._state_ready
+                    and not self._state_gaveup and self._state_asked_at
+                    and now - self._state_asked_at > 4.0):
+                self._state_gaveup = True
+                self.on_log("[!] Mixer fader ni mahiti aapto nathi -- "
+                            "fader dhyanma lidha vagar chalu rakhu chhu")
+
+            # fader/mute badlaya hoy to khabar pade te mate vaar vaar puchho
+            # (/xremote thi mixer jate pan moklé chhe, aa safety net chhe)
+            if self.feature("respect_fader"):
+                if now - self._last_state_poll >= 2.0:
+                    self._last_state_poll = now
+                    with self._lock:
+                        sel = [i + 1 for i in self.indexes]
+                    self._poll_channel_state(sel)
+                    self._poll_groups()
+                if now - self._last_full_poll >= 15.0:
+                    self._last_full_poll = now
+                    self._poll_channel_state(range(1, NUM_CHANNELS + 1))
             if now - last_status >= 0.1:
                 last_status = now
                 if not self.connected and self.packets > 0:
