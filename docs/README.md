@@ -6,6 +6,8 @@
 | # | ફાઈલ | શેના વિશે |
 |---|---|---|
 | — | [../REQUIREMENTS.md](../REQUIREMENTS.md) | **શું બનાવવાનું છે** — પહેલા આ વાંચો |
+| 00 | [00-EVERYTHING-IN-ONE-FILE.md](00-EVERYTHING-IN-ONE-FILE.md) | **Everything in one file** (English) — same as below |
+| 00 | [00-BADHU-EK-FILE-MA.md](00-BADHU-EK-FILE-MA.md) | **બધું એક જ ફાઈલમાં** — બધાં ફીચર, લોજિક, મર્યાદા |
 | 01 | [01-auto-fx-mute.md](01-auto-fx-mute.md) | મુખ્ય ફીચર — અવાજ પ્રમાણે mute/unmute |
 | 02 | [02-channel-selection.md](02-channel-selection.md) | કઈ ચેનલ સાંભળવી |
 | 03 | [03-targets-universal.md](03-targets-universal.md) | શું કંટ્રોલ કરવું (૮૬ target) |
@@ -16,6 +18,8 @@
 | 08 | [08-osc-protocol.md](08-osc-protocol.md) | મિક્સરની ભાષા (OSC) |
 | 09 | [09-troubleshooting.md](09-troubleshooting.md) | **પ્રોબ્લેમ આવે તો** |
 | 10 | [10-fader-aware.md](10-fader-aware.md) | **Fader / Mute ધ્યાનમાં લેવું** |
+| 11 | [11-auto-switch.md](11-auto-switch.md) | **બે Zoom** — લાઈન મરે તો જાતે સ્વિચ |
+| 12 | [12-fader-boost.md](12-fader-boost.md) | Fader જાતે 0 dB પર, પાછું જ્યાં હતું ત્યાં |
 
 ## ફાઈલોનો નકશો
 
@@ -24,6 +28,7 @@ m32_app.py         ← બધું અહીંથી ચાલુ થાય (e
    ├── m32_gui.py        સ્ક્રીન વાળું UI
    ├── m32_automation.py CMD વાળું
    │      └── m32_engine.py   ★ આખું મગજ — બન્ને આ જ વાપરે
+   │             └── m32_switcher.py  બે Zoom વચ્ચે સ્વિચ
    │             └── m32_core.py   જોડાણ, dB, features, targets
    │                    └── osc_lite.py   મિક્સરની ભાષા
    ├── find_mixer.py     નેટવર્કમાં શોધવું
@@ -31,7 +36,7 @@ m32_app.py         ← બધું અહીંથી ચાલુ થાય (e
    ├── meter_scan.py     ચેનલ આપોઆપ શોધવી
    ├── test_fx.py        target ટેસ્ટ
    ├── m32_simulator.py  નકલી M32
-   └── test_all.py       ૬૩ આપોઆપ ટેસ્ટ
+   └── test_all.py       ૧૧૯ આપોઆપ ટેસ્ટ
 ```
 
 **સૌથી અગત્યનો નિયમ:** લોજિક `m32_engine.py` માં જ લખવું.

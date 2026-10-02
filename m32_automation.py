@@ -32,15 +32,8 @@ class ConsoleRunner:
         self.last_draw = 0.0
         self.started = time.time()
 
-        log_name = cfg.get("log_file") or ""
-        self.log_fp = None
-        if log_name:
-            try:
-                self.log_fp = open(os.path.join(core.HERE, log_name), "a",
-                                   encoding="utf-8")
-            except Exception:
-                self.log_fp = None
-
+        # automation.log have ENGINE pote lakhe chhe ('logging' toggle
+        # pramane) -- GUI ane CMD, banne ma ek j rite.
         self.engine = m32_engine.Engine(cfg, on_log=self.log, on_status=self.draw)
 
     # ------------------------------------------------------------ log
@@ -48,12 +41,6 @@ class ConsoleRunner:
         line = "[%s] %s" % (time.strftime("%H:%M:%S"), msg)
         sys.stdout.write("\r" + " " * 78 + "\r")
         print(line)
-        if self.log_fp:
-            try:
-                self.log_fp.write(time.strftime("%Y-%m-%d ") + line + "\n")
-                self.log_fp.flush()
-            except Exception:
-                pass
 
     # ------------------------------------------------------------ draw
     def draw(self, snap):
@@ -124,8 +111,6 @@ class ConsoleRunner:
               % (mins, self.engine.packets, max(0, self.engine.switches - 1)))
         print("  Automation BAND.  Aabhar!")
         print(LINE)
-        if self.log_fp:
-            self.log_fp.close()
 
 
 # ---------------------------------------------------------------- tools

@@ -51,6 +51,38 @@ FEATURES = {
         "Fader / Mute dhyanma lo",
         "Fader niche hoy ke channel mute hoy to te mic na ganvo",
         True),
+    # ---- R12 : unmute thay tyare fader 0 dB par, mute thay tyare pachho ----
+    "fader_boost": (
+        "Fader jate 0 dB par",
+        "Unmute thay tyare fader 0 dB par lai javo, mute thay tyare pachho",
+        False),
+
+    # ---- R11 : SMART SOURCE SWITCH (be Zoom mathi jivtu chalu rakhvu) ----
+    "auto_switch": (
+        "Smart Source Switch",
+        "Line mari jay to biji source par jate switch thai jay",
+        False),
+    "switch_cross_check": (
+        "Biji line sathe sarkhavo",
+        "Ek chup ane biji bole -> e vishram nathi, line tuti chhe",
+        True),
+    "switch_smart_noise": (
+        "Hum ane awaaj olakho",
+        "Sapat ghargharat ne 'awaaj' ma na ganvo (1-2 dB walo prashn)",
+        True),
+    "switch_stability": (
+        "Pachha jata sthirta chakaso",
+        "Upper line sthir thay pachhi j tya pachha javu",
+        True),
+    "switch_at_pause": (
+        "Vishram ma j switch karo",
+        "Be Zoom vachche time no farak sambhalay nahi te mate",
+        True),
+    "switch_watchdog": (
+        "Data band -> freeze",
+        "Meter data na aave to switch karvu j nahi",
+        True),
+
     "safe_mode": (
         "Safe Mode (test)",
         "Mixer ne KAI command na moklo -- fakt screen par batavo",
@@ -121,6 +153,121 @@ DEFAULTS = {
 DEFAULTS["features"] = {key: item[2] for key, item in FEATURES.items()}
 
 
+# ================================================================ R12 fader
+# Unmute thay tyare fader 0 dB par lai javo, mute thay tyare pachho
+# je hato tya. (Dakhla: -20 -> 0 ... pachhu mute -> -20)
+FADER_BOOST_DEFAULTS = {
+    "target": "/dca/8/fader",   # kayo fader -- user badli shake
+    "to_db": 0.0,               # kya sudhi lai javo
+    "tolerance_db": 1.0,        # aatla ni ander hoy to hath j na lagavo
+    "ramp_ms": 250,             # dhime dhime (0 = turat)
+}
+DEFAULTS["fader_boost"] = dict(FADER_BOOST_DEFAULTS)
+
+
+# ================================================================ meter map
+# Bank 0 ma 70 value aave chhe. Kayo index kai vastu no chhe te --
+# AA KHARAA M32 (firmware 4.13) PAR MAAPINE NAKKI KARELU CHHE, andaz nathi.
+#
+#     0-31   CH 1-32
+#     32-39  Aux In 1-8
+#     40-47  FX Return 1-8
+#     48-63  Bus 1-16
+#     64-69  Matrix 1-6
+#
+# Aa thi "universal selection" bane chhe -- fakt channel nahi, Aux In
+# ke FX Return pan source tarike vaapri shakay.
+METER_MAP = [
+    ("CH",         0,  32, "/ch/%02d/mix/on"),
+    ("Aux In",    32,   8, "/auxin/%02d/mix/on"),
+    ("FX Return", 40,   8, "/fxrtn/%02d/mix/on"),
+    ("Bus",       48,  16, "/bus/%02d/mix/on"),
+    ("Matrix",    64,   6, "/mtx/%02d/mix/on"),
+]
+
+# Bank 0 ma KUL ketli value aave chhe (70). Engine aa jetlu moto list
+# rakhe chhe, etle Aux In / FX Return / Bus / Matrix pan Smart Switch ni
+# source bani shake -- fakt CH 1-32 ni maryada nathi.
+METER_COUNT = max(start + count for _l, start, count, _f in METER_MAP)
+
+
+def meter_choices(names=None):
+    """
+    Sambhalva layak badhi vastu ni yaadi.
+    Return: [(dekhatu naam, meter index, control no OSC path), ...]
+    """
+    out = []
+    for label, start, count, fmt in METER_MAP:
+        for n in range(1, count + 1):
+            idx = start + n - 1
+            text = "%s %d" % (label, n)
+            if label == "CH" and names and (names.get(n) or "").strip():
+                text += " - " + names[n].strip()
+            out.append((text, idx, fmt % n))
+    return out
+
+
+def meter_label(index, names=None):
+    """Index parthi manas samje evu naam ("CH 14 - Zoom")."""
+    for text, idx, _path in meter_choices(names):
+        if idx == index:
+            return text
+    return "index %d" % index
+
+
+def find_by_name(names, *words):
+    """
+    Channel na naam ma aa shabd shodho.
+    Return: channel number athva None.  (dakhla: find_by_name(names, "zoom"))
+    """
+    for ch in sorted(names or {}):
+        nm = (names.get(ch) or "").strip().lower()
+        if not nm:
+            continue
+        for w in words:
+            if w.lower() in nm:
+                return ch
+    return None
+
+
+# ================================================================ R11 switch
+def switch_defaults():
+    """m32_switcher na default (import ni ghadmathal talvani)."""
+    try:
+        import m32_switcher
+        d = m32_switcher.defaults()
+    except Exception:
+        d = {}
+    d["sources"] = []
+    return d
+
+
+DEFAULTS["auto_switch"] = switch_defaults()
+
+
+def switch_config(cfg):
+    """config.json mathi switcher na settings kaadho (khoot hoy to default)."""
+    out = switch_defaults()
+    raw = cfg.get("auto_switch")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if not k.startswith("_") and not k.endswith("_note"):
+                out[k] = v
+    out["sources"] = [s for s in (out.get("sources") or [])
+                      if isinstance(s, dict)]
+    return out
+
+
+def fader_boost_config(cfg):
+    out = dict(FADER_BOOST_DEFAULTS)
+    raw = cfg.get("fader_boost")
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k in out and v is not None:
+                out[k] = v
+    return out
+
+
 # ---------------------------------------------------------------- console
 def setup_console():
     """Windows cmd ma unicode crash na thay te mate."""
@@ -169,7 +316,28 @@ CONFIG_TEMPLATE = {
     "_comment_5": "==== FEATURES (GUI na toggle button aa badle chhe) ====",
     "features": {key: item[2] for key, item in FEATURES.items()},
     "fx_targets_off": [],
-    "_comment_6": "==== OTHER ====",
+
+    "_comment_6": ("==== R12 : FADER JATE 0 dB PAR ===="
+                   "  (unmute -> 0 dB, mute -> je hato tya pachho)"),
+    "fader_boost": dict(FADER_BOOST_DEFAULTS),
+    "fader_boost_note": ("target = kayo fader (dakhla: /dca/8/fader) | "
+                         "to_db = kya sudhi | tolerance_db = aatlani "
+                         "ander hoy to hath na lagavo"),
+
+    "_comment_7": ("==== R11 : SMART SOURCE SWITCH ===="
+                   "  (be Zoom -- line mari jay to biji par jate switch)"),
+    "auto_switch": dict(switch_defaults(), sources=[
+        {"name": "Zoom (PC)", "on": True, "index": 8,
+         "targets": ["/ch/09/mix/on"], "fader": "/ch/09/mix/fader"},
+        {"name": "Aux 1 (mob)", "on": True, "index": 9,
+         "targets": ["/ch/10/mix/on"], "fader": "/ch/10/mix/fader"},
+    ]),
+    "auto_switch_note": ("sources ni GOTHVAN = priority (upar = pehla). "
+                         "index = meter no index (CH 9 -> 8). "
+                         "stable_s = pachha jata ketli var sthir joiye "
+                         "(180 = 3 minute). GUI ma badhu badli shakay."),
+
+    "_comment_8": "==== OTHER ====",
     "log_file": "automation.log",
 }
 
@@ -370,6 +538,33 @@ def fader_to_db(value):
     if f > 0.0:
         return f * 480.0 - 90.0
     return -90.0
+
+
+def db_to_fader(db):
+    """
+    fader_to_db() thi ULTU. dB aapo -> 0.0-1.0 no fader value male.
+
+        +10 dB  ->  1.00
+          0 dB  ->  0.75   (unity)
+        -10 dB  ->  0.50
+        -20 dB  ->  0.375
+        -30 dB  ->  0.25
+        -60 dB  ->  0.0625
+    """
+    try:
+        d = float(db)
+    except (TypeError, ValueError):
+        return 0.75
+    d = max(-90.0, min(10.0, d))
+    if d >= -10.0:
+        f = (d + 30.0) / 40.0
+    elif d >= -30.0:
+        f = (d + 50.0) / 80.0
+    elif d >= -60.0:
+        f = (d + 70.0) / 160.0
+    else:
+        f = (d + 90.0) / 480.0
+    return max(0.0, min(1.0, f))
 
 
 def fader_text(value):

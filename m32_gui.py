@@ -111,6 +111,101 @@ class LevelBar(tk.Canvas):
             self.coords(self.mark, tx, 0, tx, self.h)
 
 
+
+
+# ====================================================================== picker
+class PickMany(tk.Toplevel):
+    """
+    Ek karta VADHARE vastu pasand karva nu nanu window.
+
+    Stereo pair mate joiye chhe -- dakhla: "Photo Video" CH 31 (L) ane
+    CH 32 (R). Banne mute thava joiye, nahi to ek baju chalu rahi jay.
+    Aage jata gme tetli channel pasand kari shakay.
+    """
+
+    def __init__(self, master, title, items, chosen, on_ok):
+        tk.Toplevel.__init__(self, master)
+        self.title(title)
+        self.configure(bg=BG)
+        self.transient(master)
+        self.on_ok = on_ok
+        self.vars = {}
+
+        ttk.Label(self, text=title, style="Head.TLabel").pack(
+            anchor="w", padx=10, pady=(10, 2))
+        ttk.Label(self, text="jetli joiye tetli tick karo "
+                             "(stereo hoy to L ane R banne)",
+                  style="Dim.TLabel").pack(anchor="w", padx=10)
+
+        # ---- shodhvanu khanu ----
+        bar = ttk.Frame(self)
+        bar.pack(fill="x", padx=10, pady=6)
+        ttk.Label(bar, text="Shodho:").pack(side="left")
+        self.q = tk.StringVar()
+        e = ttk.Entry(bar, textvariable=self.q, width=24)
+        e.pack(side="left", padx=6)
+        self.q.trace_add("write", lambda *a: self._fill())
+        self.count = ttk.Label(bar, text="", style="Dim.TLabel")
+        self.count.pack(side="left", padx=10)
+
+        # ---- yaadi (scroll sathe) ----
+        box = ttk.Frame(self)
+        box.pack(fill="both", expand=True, padx=10)
+        cv = tk.Canvas(box, bg=BG, highlightthickness=0, width=330, height=300)
+        sb = ttk.Scrollbar(box, orient="vertical", command=cv.yview)
+        self.inner = ttk.Frame(cv)
+        self.inner.bind("<Configure>",
+                        lambda e: cv.configure(scrollregion=cv.bbox("all")))
+        cv.create_window((0, 0), window=self.inner, anchor="nw")
+        cv.configure(yscrollcommand=sb.set)
+        cv.pack(side="left", fill="both", expand=True)
+        sb.pack(side="right", fill="y")
+        cv.bind_all("<MouseWheel>",
+                    lambda e: cv.yview_scroll(-1 * (e.delta // 120), "units"))
+        self._cv = cv
+
+        self.items = list(items)          # [(dekhatu naam, value), ...]
+        for _label, val in self.items:
+            self.vars[val] = tk.BooleanVar(value=val in (chosen or []))
+        self._fill()
+
+        row = ttk.Frame(self)
+        row.pack(fill="x", padx=10, pady=10)
+        ttk.Button(row, text="THIK CHHE", command=self._ok).pack(side="left")
+        ttk.Button(row, text="Rehva do",
+                   command=self.destroy).pack(side="left", padx=6)
+        ttk.Button(row, text="Badhu kaadho",
+                   command=self._none).pack(side="right")
+
+        self.grab_set()
+        e.focus_set()
+
+    def _fill(self):
+        for w in self.inner.winfo_children():
+            w.destroy()
+        q = (self.q.get() or "").strip().lower()
+        n = 0
+        for label, val in self.items:
+            if q and q not in label.lower():
+                continue
+            n += 1
+            r = ttk.Frame(self.inner)
+            r.pack(fill="x", anchor="w")
+            Toggle(r, variable=self.vars[val], width=36,
+                   height=18).pack(side="left", padx=(0, 8))
+            ttk.Label(r, text=label).pack(side="left")
+        self.count.configure(text="%d dekhay chhe" % n)
+        self._cv.yview_moveto(0)
+
+    def _none(self):
+        for v in self.vars.values():
+            v.set(False)
+
+    def _ok(self):
+        picked = [val for _l, val in self.items if self.vars[val].get()]
+        self.destroy()
+        self.on_ok(picked)
+
 # ====================================================================== app
 class App:
     def __init__(self, root):
@@ -152,6 +247,13 @@ class App:
         st.configure("Head.TLabel", font=("Segoe UI", 10, "bold"), foreground=BLUE)
         st.configure("Big.TLabel", font=("Consolas", 14, "bold"))
         st.configure("TButton", padding=4)
+        # readonly combobox default ma jhankho dekhay chhe -- vanchay
+        # tevo karo (Smart Switch ma channel pasand karva vaparay chhe)
+        st.map("TCombobox",
+               fieldbackground=[("readonly", "#2c2c2c")],
+               foreground=[("readonly", FG)],
+               selectbackground=[("readonly", "#2c2c2c")],
+               selectforeground=[("readonly", FG)])
         st.configure("TLabelframe", background=BG, foreground=BLUE)
         st.configure("TLabelframe.Label", background=BG, foreground=BLUE,
                      font=("Segoe UI", 10, "bold"))
@@ -161,15 +263,26 @@ class App:
         root = self.root
         self._build_top(root)
 
-        mid = ttk.Frame(root, padding=(10, 0))
+        # be tab : juno "Auto FX" ane navo "Smart Switch"
+        nb = ttk.Notebook(root)
+        nb.pack(fill="both", expand=True, padx=10, pady=(4, 0))
+        self.nb = nb
+
+        tab1 = ttk.Frame(nb)
+        nb.add(tab1, text="  AUTO FX MUTE  ")
+        mid = ttk.Frame(tab1)
         mid.pack(fill="both", expand=True)
         mid.columnconfigure(0, weight=3)
         mid.columnconfigure(1, weight=2)
         mid.rowconfigure(0, weight=1)
         self._build_channels(mid)
         self._build_targets(mid)
+        self._build_features(tab1)
 
-        self._build_features(root)
+        tab2 = ttk.Frame(nb)
+        nb.add(tab2, text="  SMART SWITCH (be Zoom)  ")
+        self._build_switch_tab(tab2)
+
         self._build_bottom(root)
 
     # ---------------------------------------------- top
@@ -308,7 +421,10 @@ class App:
         self.feat_vars = {}
         saved = self.cfg.get("features") or {}
 
-        keys = [k for k in core.FEATURES if k != "auto_fx"]
+        # auto_fx = moto toggle ; switch wala = biji tab ma
+        keys = [k for k in core.FEATURES
+                if k != "auto_fx" and not k.startswith("switch_")
+                and k != "auto_switch"]
         per_col = (len(keys) + 2) // 3
         for i, key in enumerate(keys):
             name, hint, default = core.FEATURES[key]
@@ -360,6 +476,56 @@ class App:
                                "band thaya pachhi ketlu chalu rakhvu")
         self.atk_lbl = slider(2, "Attack", self.atk_var, 0.0, 0.5, "%.2f s",
                               "khaasi thi chalu na thay te mate vadharo")
+
+        # ---- R12 : unmute thay to fader 0 dB par, mute thay to pachho ----
+        ttk.Separator(box, orient="horizontal").pack(fill="x", pady=8)
+        fbf = ttk.Frame(box)
+        fbf.pack(fill="x")
+        fb = core.fader_boost_config(self.cfg)
+        self.fb_vars = {}
+
+        ttk.Label(fbf, text="Fader jate 0 dB par :", style="Head.TLabel").pack(
+            side="left", padx=(0, 10))
+
+        ttk.Label(fbf, text="kayo fader").pack(side="left")
+        self.fb_vars["target"] = tk.StringVar(value=fb["target"])
+        faders = ["/dca/%d/fader" % n for n in range(1, 9)]
+        faders += ["/ch/%02d/mix/fader" % n for n in range(1, NUM_CHANNELS + 1)]
+        cb = ttk.Combobox(fbf, textvariable=self.fb_vars["target"],
+                          values=faders, width=20)
+        cb.pack(side="left", padx=(4, 14))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._fb_push())
+
+        for key, label, width in (("to_db", "kya sudhi (dB)", 6),
+                                  ("tolerance_db", "chhut (dB)", 5),
+                                  ("ramp_ms", "ketli var (ms)", 6)):
+            ttk.Label(fbf, text=label).pack(side="left")
+            v = tk.StringVar(value=str(fb[key]))
+            self.fb_vars[key] = v
+            e = ttk.Entry(fbf, textvariable=v, width=width)
+            e.pack(side="left", padx=(4, 14))
+            e.bind("<FocusOut>", lambda ev: self._fb_push())
+
+        ttk.Label(fbf, text="(dakhla: -20 dB -> unmute -> 0 dB -> mute -> -20 dB)",
+                  style="Dim.TLabel", font=("Segoe UI", 8)).pack(side="left")
+
+    def fb_dict(self):
+        """R12 na khana mathi settings."""
+        out = core.fader_boost_config(self.cfg)
+        for key, var in getattr(self, "fb_vars", {}).items():
+            val = var.get()
+            if key == "target":
+                out[key] = val.strip()
+            else:
+                try:
+                    out[key] = float(val)
+                except (TypeError, ValueError):
+                    pass
+        return out
+
+    def _fb_push(self):
+        if self.engine:
+            self.engine.set_params(fader_boost=self.fb_dict())
 
     # ---------------------------------------------- bottom
     def _build_bottom(self, root):
@@ -448,8 +614,8 @@ class App:
             self._target_off.discard(path)
         else:
             self._target_off.add(path)
-        self.logline("%s : %s" % (core.target_label(path, self.names),
-                                  "chalu" if on else "band"))
+        self._log("%s : %s" % (core.target_label(path, self.names),
+                               "chalu" if on else "band"))
         self._push_targets()
 
     def _enabled_targets(self):
@@ -475,6 +641,17 @@ class App:
         self._target_paths = list(self.cfg.get("fx_targets") or [])
         self._target_off = set(self.cfg.get("fx_targets_off") or [])
         self._refresh_targets()
+
+    def _log(self, msg):
+        """
+        Aapno (GUI no) message. Engine hoy to teni rite -- jethi
+        automation.log ma pan jay. Nahi to fakt screen par.
+        """
+        eng = getattr(self, "engine", None)
+        if eng is not None:
+            eng.log(msg)
+        else:
+            self.logline(msg)
 
     def logline(self, msg):
         self.log.configure(state="normal")
@@ -529,7 +706,7 @@ class App:
             return
         if not self.engine:
             return
-        self.logline("TEST shuru -- mixer ni screen juo (3 var on/off)")
+        self._log("TEST shuru -- mixer ni screen juo (3 var on/off)")
         threading.Thread(target=self._test_worker, args=(targets,),
                          daemon=True).start()
 
@@ -581,6 +758,11 @@ class App:
             cfg["threshold_db"] = self.th_var.get()
             cfg["hold_time"] = self.hold_var.get()
             cfg["attack_time"] = self.atk_var.get()
+        # navi tab ni settings pan engine ne aapo
+        if hasattr(self, "sw_cfg"):
+            cfg["auto_switch"] = self._sw_gather()
+        if hasattr(self, "fb_vars"):
+            cfg["fader_boost"] = self.fb_dict()
 
         self.conn_var.set("judai rahyo chhu...")
         self.conn_dot.itemconfig(self.dot, fill="#c0a020")
@@ -635,8 +817,434 @@ class App:
             "fx_targets": self._target_paths,
             "fx_targets_off": sorted(self._target_off),
             "features": self.features_dict(),
+            "auto_switch": self._sw_gather(),
+            "fader_boost": self.fb_dict(),
         })
         self.logline("config.json ma save thai gayu")
+
+
+    # ============================================================ SMART SWITCH
+    def _build_switch_tab(self, parent):
+        """
+        R11 -- be Zoom mathi je JIVTI hoy te live rakhvi.
+        Uparthi niche: master toggle -> source ni yaadi -> settings.
+        """
+        self.sw_cfg = core.switch_config(self.cfg)
+        self.sw_rows = []
+
+        # ---------------------------------------------- 1) master toggle
+        head = ttk.Frame(parent, padding=(6, 6))
+        head.pack(fill="x")
+
+        self.sw_on_var = tk.BooleanVar(
+            value=bool((self.cfg.get("features") or {}).get("auto_switch", False)))
+        Toggle(head, variable=self.sw_on_var, width=70, height=34,
+               command=lambda v: self._feature_changed("auto_switch", v)
+               ).pack(side="left")
+        self.feat_vars["auto_switch"] = self.sw_on_var
+
+        box = ttk.Frame(head)
+        box.pack(side="left", padx=10)
+        ttk.Label(box, text="SMART SOURCE SWITCH",
+                  font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(box, text="line mari jay to biji source par jate switch",
+                  style="Dim.TLabel").pack(anchor="w")
+
+        self.sw_live_lbl = ttk.Label(head, text="LIVE:  --",
+                                     font=("Consolas", 14, "bold"))
+        self.sw_live_lbl.pack(side="right", padx=8)
+
+        # ---------------------------------------------- 2) source ni yaadi
+        lst = ttk.Labelframe(parent, text=" SOURCE  (upar = vadhare priority) ",
+                             padding=6)
+        lst.pack(fill="both", expand=True, padx=6, pady=4)
+
+        hdr = ttk.Frame(lst)
+        hdr.pack(fill="x")
+        for text, w in (("", 6), ("#", 3), ("NAAM", 16), ("SAMBHALVU", 22),
+                        ("CONTROL KARVU", 24), ("HALAT", 12), ("dB", 8)):
+            ttk.Label(hdr, text=text, width=w, style="Dim.TLabel").pack(side="left")
+
+        self.sw_rows_box = ttk.Frame(lst)
+        self.sw_rows_box.pack(fill="both", expand=True)
+
+        bar = ttk.Frame(lst)
+        bar.pack(fill="x", pady=(6, 0))
+        ttk.Button(bar, text="+  SOURCE UMERO",
+                   command=self.sw_add).pack(side="left")
+        ttk.Button(bar, text="NAAM parthi jate gothvo",
+                   command=self.sw_preset).pack(side="left", padx=6)
+        self.sw_warn = ttk.Label(bar, text="", foreground=RED)
+        self.sw_warn.pack(side="left", padx=12)
+
+        # ---------------------------------------------- 3) settings
+        st = ttk.Labelframe(parent, text=" SETTINGS ", padding=8)
+        st.pack(fill="x", padx=6, pady=(0, 4))
+
+        self.sw_vars = {}
+
+        def num(col, row, key, label, hint, width=7):
+            f = ttk.Frame(st)
+            f.grid(row=row, column=col, sticky="w", padx=(0, 18), pady=3)
+            ttk.Label(f, text=label).pack(anchor="w")
+            v = tk.StringVar(value=str(self.sw_cfg.get(key, "")))
+            self.sw_vars[key] = v
+            ttk.Entry(f, textvariable=v, width=width).pack(anchor="w")
+            ttk.Label(f, text=hint, style="Dim.TLabel",
+                      font=("Segoe UI", 8)).pack(anchor="w")
+
+        num(0, 0, "open_db", "Chalu ganvu (dB)", "aa thi UPAR = awaaj chhe")
+        num(1, 0, "close_db", "Band ganvu (dB)", "aa thi NICHE = awaaj nathi")
+        num(2, 0, "dead_hold_s", "Line mari (sec)", "aatli var chup -> switch")
+        num(3, 0, "min_dwell_s", "Ochhu ma ochhu (sec)", "switch pachhi tya j raho")
+
+        # ---- stable_s : MINUTE + SECOND alag alag (tame kidhu tem) ----
+        f = ttk.Frame(st)
+        f.grid(row=0, column=4, sticky="w", pady=3)
+        ttk.Label(f, text="Pachha jata raah").pack(anchor="w")
+        line = ttk.Frame(f)
+        line.pack(anchor="w")
+        total = float(self.sw_cfg.get("stable_s", 180))
+        self.sw_min = tk.StringVar(value=str(int(total // 60)))
+        self.sw_sec = tk.StringVar(value=str(int(round(total % 60))))
+        ttk.Spinbox(line, from_=0, to=60, width=4,
+                    textvariable=self.sw_min).pack(side="left")
+        ttk.Label(line, text=" min ").pack(side="left")
+        ttk.Spinbox(line, from_=0, to=59, width=4,
+                    textvariable=self.sw_sec).pack(side="left")
+        ttk.Label(line, text=" sec").pack(side="left")
+        ttk.Label(f, text="aatli var sthir rahe to j pachha javu",
+                  style="Dim.TLabel", font=("Segoe UI", 8)).pack(anchor="w")
+
+        # ---- aa feature na potana toggle ----
+        ttk.Separator(st, orient="horizontal").grid(
+            row=1, column=0, columnspan=5, sticky="ew", pady=8)
+        sub = ttk.Frame(st)
+        sub.grid(row=2, column=0, columnspan=5, sticky="w")
+        saved = self.cfg.get("features") or {}
+        keys = [k for k in core.FEATURES if k.startswith("switch_")]
+        for i, key in enumerate(keys):
+            name, hint, default = core.FEATURES[key]
+            cell = ttk.Frame(sub)
+            cell.grid(row=i // 3, column=i % 3, sticky="w",
+                      padx=(0, 24), pady=3)
+            var = tk.BooleanVar(value=bool(saved.get(key, default)))
+            self.feat_vars[key] = var
+            Toggle(cell, variable=var, width=40, height=20,
+                   command=lambda v, k=key: self._feature_changed(k, v)
+                   ).pack(side="left", padx=(0, 8))
+            txt = ttk.Frame(cell)
+            txt.pack(side="left")
+            ttk.Label(txt, text=name).pack(anchor="w")
+            ttk.Label(txt, text=hint, style="Dim.TLabel",
+                      font=("Segoe UI", 8)).pack(anchor="w")
+
+        # ---------------------------------------------- 4) engineer na button
+        act = ttk.Frame(parent, padding=(6, 0))
+        act.pack(fill="x", pady=(0, 6))
+
+        self.sw_hold_var = tk.BooleanVar(value=False)
+        Toggle(act, variable=self.sw_hold_var, width=46, height=22,
+               command=self._sw_hold).pack(side="left")
+        ttk.Label(act, text="AUTO  HOLD  (jem chhe tem pakdi rakho)").pack(
+            side="left", padx=(8, 18))
+        ttk.Button(act, text="HAMNA J SWITCH KARO",
+                   command=self.sw_now).pack(side="left")
+        self.sw_count_lbl = ttk.Label(act, text="", style="Dim.TLabel")
+        self.sw_count_lbl.pack(side="left", padx=14)
+
+        self._sw_refresh()
+
+    # ------------------------------------------------------------ rows
+    def _sw_refresh(self):
+        """Source ni yaadi fari dorо."""
+        for w in self.sw_rows_box.winfo_children():
+            w.destroy()
+        self.sw_rows = []
+
+        cat = []
+        for _grp, items in core.target_catalog():
+            for label, path in items:
+                cat.append((core.target_label(path, self.names), path))
+        self._sw_cat = cat
+
+        # CH 1-32 + Aux In + FX Return + Bus + Matrix (kharaa desk par
+        # maapel meter map parthi -- docs/11 juo)
+        self._sw_listen = core.meter_choices(self.names)
+        listen = [t for t, _i, _p in self._sw_listen]
+
+        for i, src in enumerate(self.sw_cfg.get("sources") or []):
+            row = ttk.Frame(self.sw_rows_box)
+            row.pack(fill="x", pady=1)
+
+            mv = ttk.Frame(row, width=6)
+            mv.pack(side="left")
+            ttk.Button(mv, text="^", width=2,
+                       command=lambda k=i: self.sw_move(k, -1)).pack(side="left")
+            ttk.Button(mv, text="v", width=2,
+                       command=lambda k=i: self.sw_move(k, 1)).pack(side="left")
+
+            on = tk.BooleanVar(value=bool(src.get("on", True)))
+            Toggle(row, variable=on, width=36, height=18,
+                   command=lambda v, k=i: self._sw_set(k, "on", v)).pack(side="left")
+
+            ttk.Label(row, text="%d" % (i + 1), width=3).pack(side="left")
+
+            nm = tk.StringVar(value=src.get("name", ""))
+            e = ttk.Entry(row, textvariable=nm, width=18)
+            e.pack(side="left", padx=2)
+            nm.trace_add("write", lambda *a, k=i, v=nm:
+                         self._sw_set(k, "name", v.get()))
+
+            # ---- SAMBHALVU (ek karta vadhare pan) ----
+            idxs = self._src_indexes(src)
+            b1 = ttk.Button(row, width=22,
+                            text=self._listen_text(idxs),
+                            command=lambda k=i: self._sw_pick_listen(k))
+            b1.pack(side="left", padx=2)
+
+            # ---- CONTROL KARVU (stereo pair mate banne) ----
+            paths = src.get("targets") or []
+            b2 = ttk.Button(row, width=24,
+                            text=self._target_text(paths),
+                            command=lambda k=i: self._sw_pick_target(k))
+            b2.pack(side="left", padx=2)
+
+            stl = ttk.Label(row, text="--", width=12, style="Dim.TLabel")
+            stl.pack(side="left")
+            dbl = ttk.Label(row, text="", width=8, anchor="e",
+                            style="Dim.TLabel")
+            dbl.pack(side="left")
+            ttk.Button(row, text="x", width=2,
+                       command=lambda k=i: self.sw_del(k)).pack(side="left")
+
+            self.sw_rows.append({"state": stl, "db": dbl, "name": nm})
+
+        self._sw_check()
+        self._sw_push()
+
+    def _sw_check(self):
+        n = len([s for s in (self.sw_cfg.get("sources") or [])
+                 if s.get("on", True) and s.get("targets")])
+        self.sw_warn.configure(
+            text="" if n >= 2 else
+            "Ochha ma ochha 2 source joiye -- atyare %d chhe" % n)
+
+    # ------------------------------------------------------------ edit
+    def _sw_set(self, i, key, val):
+        try:
+            self.sw_cfg["sources"][i][key] = val
+        except (IndexError, KeyError):
+            return
+        if key in ("on",):
+            self._sw_check()
+        self._sw_push()
+
+    # ------------------------------------------------------------ ghana
+    @staticmethod
+    def _src_indexes(src):
+        """Source ni sambhalvani yaadi (juni config sathe pan chale)."""
+        raw = src.get("indexes")
+        if raw is None:
+            raw = src.get("index", 0)
+        if isinstance(raw, (list, tuple)):
+            return [int(x) for x in raw] or [0]
+        return [int(raw)]
+
+    def _listen_text(self, idxs):
+        if not idxs:
+            return "(pasand karo)"
+        if len(idxs) == 1:
+            return core.meter_label(idxs[0], self.names)
+        return "%s  +%d" % (core.meter_label(idxs[0], self.names),
+                            len(idxs) - 1)
+
+    def _target_text(self, paths):
+        # naam nathi mukto -- e SAMBHALVU na khana ma dekhay j chhe,
+        # ane ahi lakhan lambu thay to button ma kapai jay chhe
+        if not paths:
+            return "(pasand karo)"
+        if len(paths) == 1:
+            return core.target_label(paths[0])
+        return "%s  +%d" % (core.target_label(paths[0]), len(paths) - 1)
+
+    def _sw_pick_listen(self, i):
+        """SAMBHALVU -- ek karta vadhare pasand kari shakay."""
+        items = [(t, idx) for t, idx, _p in core.meter_choices(self.names)]
+        src = self.sw_cfg["sources"][i]
+
+        def done(picked):
+            src["indexes"] = picked or [0]
+            src.pop("index", None)
+            # target khali hoy to e j vastu no target jate bhari do
+            if not src.get("targets"):
+                paths = [p for _t, idx, p in core.meter_choices()
+                         if idx in picked]
+                src["targets"] = paths
+                src["faders"] = [p.replace("/mix/on", "/mix/fader")
+                                 for p in paths if "/mix/on" in p]
+            self._sw_refresh()
+
+        PickMany(self.root, "%s -- SHU SAMBHALVU ?" % src.get("name", ""),
+                 items, self._src_indexes(src), done)
+
+    def _sw_pick_target(self, i):
+        """CONTROL KARVU -- stereo pair mate banne (ke vadhare)."""
+        items = [(core.target_label(p, self.names), p)
+                 for _lbl, p in getattr(self, "_sw_cat", [])]
+        src = self.sw_cfg["sources"][i]
+
+        def done(picked):
+            src["targets"] = picked
+            src["faders"] = [p.replace("/mix/on", "/mix/fader")
+                             for p in picked if "/mix/on" in p]
+            src.pop("fader", None)
+            self._sw_refresh()
+
+        PickMany(self.root, "%s -- SHU MUTE / UNMUTE KARVU ?"
+                 % src.get("name", ""), items, src.get("targets") or [], done)
+
+    def sw_add(self):
+        self.sw_cfg.setdefault("sources", []).append(
+            {"name": "Source %d" % (len(self.sw_cfg["sources"]) + 1),
+             "on": True, "index": 0, "targets": []})
+        self._sw_refresh()
+
+    def sw_del(self, i):
+        try:
+            del self.sw_cfg["sources"][i]
+        except IndexError:
+            return
+        self._sw_refresh()
+
+    def sw_move(self, i, d):
+        src = self.sw_cfg.get("sources") or []
+        j = i + d
+        if 0 <= j < len(src):
+            src[i], src[j] = src[j], src[i]
+            self._sw_refresh()
+
+    def sw_preset(self):
+        """
+        Mixer na NAAM vanchi ne jate gothve.
+        (channel number hardcode karvo nahi -- desk par badlai shake chhe)
+        """
+        if not self.names:
+            messagebox.showinfo(
+                "Naam nathi",
+                "Pehla mixer sathe judao -- channel na naam vanchya "
+                "pachhi j 'Zoom' kayo channel chhe te khabar pade.")
+            return
+
+        def mk(chs, label):
+            """
+            Ek ke ghani channel mathi ek source.
+            STEREO PAIR : ek j naam ni be channel (L ane R) hoy to
+            BANNE ek j source ma -- banne mute thavа joiye, nahi to
+            ek baju chalu rahi jay.
+            """
+            txt = "CH %s" % "+".join(str(c) for c in chs)
+            return {"name": "%s (%s)" % (label, txt), "on": True,
+                    "indexes": [c - 1 for c in chs],
+                    "targets": ["/ch/%02d/mix/on" % c for c in chs],
+                    "faders": ["/ch/%02d/mix/fader" % c for c in chs]}
+
+        found, used = [], set()
+        for words, label in ((("zoom",), "Zoom"),
+                             (("photo", "video"), "Photo Video"),
+                             (("aux", "mobile", "mob"), "Aux")):
+            hit = []
+            for c in sorted(self.names):
+                if c in used:
+                    continue
+                nm = (self.names.get(c) or "").lower()
+                if any(w in nm for w in words):
+                    # e j naam ni badhi channel bhegi karo (stereo pair)
+                    if not hit or (self.names.get(hit[0]) or "").lower() == nm:
+                        hit.append(c)
+            if hit:
+                used.update(hit)
+                found.append(mk(hit, label))
+
+        if len(found) < 2:
+            self.logline("[!] Naam parthi 2 source na malya -- "
+                         "%d malyu. Hathe pasand karo."
+                         % len(found))
+        if found:
+            self.sw_cfg["sources"] = found
+            self._sw_refresh()
+            self.logline("Naam parthi gothvyu: %s"
+                         % ", ".join(s["name"] for s in found))
+
+    # ------------------------------------------------------------ push
+    def _sw_gather(self):
+        """GUI ni value -> config dict."""
+        cfg = dict(self.sw_cfg)
+        for key, var in getattr(self, "sw_vars", {}).items():
+            try:
+                cfg[key] = float(var.get())
+            except (TypeError, ValueError):
+                pass
+        try:
+            cfg["stable_s"] = (int(self.sw_min.get() or 0) * 60
+                               + int(self.sw_sec.get() or 0))
+        except (TypeError, ValueError):
+            pass
+        return cfg
+
+    def _sw_push(self):
+        self.sw_cfg = self._sw_gather()
+        if self.engine:
+            self.engine.set_params(auto_switch=self.sw_cfg)
+
+    def _sw_hold(self, on):
+        if self.engine:
+            self.engine.switcher.set_hold(bool(on))
+
+    def sw_now(self):
+        """3 minute ni raah kudavi ne hamna j switch karo."""
+        if not self.engine:
+            return
+        snap = self.engine.switcher.snapshot()
+        want = snap.get("pending") or ""
+        if not want:
+            act = self.engine.switcher.active_sources()
+            live = self.engine.switcher.live
+            other = [s for s in act if s is not live]
+            want = other[0].name if other else ""
+        if want:
+            self.engine.switcher.force_switch(want)
+        else:
+            messagebox.showinfo("Kai nathi", "Biji koi source chalu nathi.")
+
+    # ------------------------------------------------------------ live
+    def _sw_status(self, sw):
+        if not sw or not hasattr(self, "sw_rows"):
+            return
+        live = sw.get("live") or "--"
+        self.sw_live_lbl.configure(
+            text="LIVE:  %s" % live,
+            foreground=GREEN if sw.get("enabled") and live != "--" else DIM)
+
+        for row, src in zip(self.sw_rows, sw.get("sources") or []):
+            st = src.get("state")
+            colour = {"TALKING": GREEN, "QUIET": "#e0c040",
+                      "DEAD": RED}.get(st, DIM)
+            row["state"].configure(text=src.get("state_text", "--"),
+                                   foreground=colour)
+            db = src.get("db", -128.0)
+            row["db"].configure(text="%.0f" % db if db > -90 else "--")
+
+        bits = []
+        if sw.get("frozen"):
+            bits.append("DATA BAND -- FREEZE")
+        cd = sw.get("countdown")
+        if cd:
+            bits.append("pachha javanu: %d:%02d" % (int(cd) // 60, int(cd) % 60))
+        if sw.get("pending"):
+            bits.append("vishram ni raah (%s)" % sw["pending"])
+        bits.append("switch: %d" % sw.get("switch_count", 0))
+        self.sw_count_lbl.configure(text="   |   ".join(bits))
 
     # ------------------------------------------------------------ pump
     def _pump(self):
@@ -659,6 +1267,11 @@ class App:
         self.root.after(80, self._pump)
 
     def _apply_status(self, s):
+        if "switch" in s:
+            try:
+                self._sw_status(s["switch"])
+            except Exception:
+                pass
         live = s["connected"] and s["data_age"] < 2.0
         self.conn_dot.itemconfig(self.dot, fill=GREEN if live else RED)
         self.conn_var.set("%s  (FW %s)" % (s["mixer_name"], s["mixer_fw"])

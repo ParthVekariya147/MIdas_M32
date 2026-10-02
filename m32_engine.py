@@ -8,10 +8,12 @@ Etle logic ek j jagya e chhe, be jagya e sudharvi na pade.
 Alag thread ma chale chhe, etle GUI atakti nathi.
 """
 
+import os
 import threading
 import time
 
 import m32_core as core
+import m32_switcher
 import osc_lite
 
 NUM_CHANNELS = 32
@@ -34,7 +36,15 @@ class Engine(threading.Thread):
         self._want_names = threading.Event()
         self._reapply = threading.Event()
 
-        self.on_log = on_log or (lambda msg: None)
+        # ---- LOG : badha log AHI THI j pasar thay chhe ----
+        # (pehla automation.log ma, pachhi GUI/CMD ni screen par. etle
+        #  GUI ane CMD -- banne ma ek j rite log file lakhay chhe.)
+        self._log_cb = on_log or (lambda msg: None)
+        self._log_lock = threading.Lock()
+        self._log_fp = None
+        _name = str(cfg.get("log_file") or "").strip()
+        self.log_path = os.path.join(core.HERE, _name) if _name else ""
+        self.on_log = self._log
         self.on_status = on_status or (lambda snap: None)
 
         self.cfg = dict(cfg)
@@ -81,6 +91,10 @@ class Engine(threading.Thread):
         self._state_gaveup = False
         self.levels = [-128.0] * NUM_CHANNELS       # mic no kacho awaaj
         self.levels_eff = [-128.0] * NUM_CHANNELS   # fader lagavya pachhi no
+        # AAKHA bank na level (70) -- CH + Aux In + FX Return + Bus + Matrix.
+        # Smart Switch aa vaapre chhe, etle source fakt CH 1-32 ma j
+        # rehvani jarur nathi.
+        self.all_levels = [-128.0] * core.METER_COUNT
         self.level_db = -128.0
         self.active_index = self.indexes[0]
         self.fx_on = None
@@ -95,10 +109,71 @@ class Engine(threading.Thread):
         self._warned_range = False
         self._meter_address = "/meters/%d" % self.bank
 
+        # ---- R11 : SMART SOURCE SWITCH ----
+        # NOTE: switcher ne KACHO level (self.levels) j aapvo. levels_eff
+        # nahi -- kem ke backup ne aapne j mute karyu hoy tyare levels_eff
+        # -128 batave, ane pachhi "line mari gai" lagé. (asli bug talyo)
+        self.switcher = m32_switcher.SwitchController(on_log=self.on_log)
+        self.switcher.configure(core.switch_config(cfg))
+        self.switcher.set_features(self.features)
+        self._ramps = []            # chalu fader ramp
+        self._later = []            # (kyare, path, value) -- overlap mate
+
+        # ---- R12 : fader jate 0 dB par ane pachho ----
+        self.fb = core.fader_boost_config(cfg)
+        self._fb_saved = None       # mute pehla fader kya hato
+        self._fb_set = None         # aapne kai value moklelii
+
     # ------------------------------------------------------------ settings
     def feature(self, key):
         """Aa feature chalu chhe ke nahi."""
         return bool(self.features.get(key, False))
+
+    # ------------------------------------------------------------ log
+    def log(self, msg):
+        """
+        Bahar thi (GUI thi) pan AA J vaparvu -- jethi message screen par
+        ane automation.log ma, banne jagya e jay.
+        """
+        self._log(msg)
+
+    def _log(self, msg):
+        """Pehla file ma lakho, pachhi je sambhaltu hoy tene aapo."""
+        self._write_log(msg)
+        try:
+            self._log_cb(msg)
+        except Exception:
+            pass
+
+    def _write_log(self, msg):
+        """
+        automation.log ma lakhvu -- 'logging' toggle CHALU hoy to J.
+        Chalu hoy tyare pan toggle badli shakay -- turat asar thay chhe.
+        File na khulé to chup rahevu (program atakvo na joiye).
+        """
+        if not self.log_path or not self.feature("logging"):
+            return
+        with self._log_lock:
+            try:
+                if self._log_fp is None:
+                    self._log_fp = open(self.log_path, "a", encoding="utf-8")
+                    self._log_fp.write("\n==== CHALU : %s ====\n"
+                                       % time.strftime("%Y-%m-%d %H:%M:%S"))
+                self._log_fp.write("%s  %s\n"
+                                   % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+                self._log_fp.flush()
+            except Exception:
+                self.log_path = ""        # ek var na lakhay to fari nahi
+                self._log_fp = None
+
+    def _close_log(self):
+        with self._log_lock:
+            if self._log_fp is not None:
+                try:
+                    self._log_fp.close()
+                except Exception:
+                    pass
+                self._log_fp = None
 
     @property
     def dry_run(self):
@@ -114,6 +189,7 @@ class Engine(threading.Thread):
             return
         name = core.FEATURES.get(key, (key,))[0]
         self.on_log("%s : %s" % (name, "CHALU" if on else "BAND"))
+        self.switcher.set_features(self.features)
 
         if key == "safe_mode" and not on and self.active:
             self._reapply.set()          # safe mode nikalyu -> halat pachhi lagavo
@@ -138,6 +214,11 @@ class Engine(threading.Thread):
                 self._reapply.set()
             if "features" in kw:
                 self.features.update(kw["features"] or {})
+                self.switcher.set_features(self.features)
+            if "auto_switch" in kw:
+                self.switcher.configure(kw["auto_switch"] or {})
+            if "fader_boost" in kw:
+                self.fb.update(kw["fader_boost"] or {})
             if "invert" in kw:
                 self.invert = kw["invert"]
                 self._reapply.set()
@@ -174,6 +255,8 @@ class Engine(threading.Thread):
             for path in self.targets:
                 self.mixer.send(path, core.mute_value(path, on, self.invert))
                 time.sleep(0.002)
+            # R12 -- unmute thay tyare fader 0 dB par, mute thay tyare pachho
+            self._fader_boost(on)
         self.fx_on = on
         self.switches += 1
         if why:
@@ -188,6 +271,174 @@ class Engine(threading.Thread):
         """GUI na TEST button mate."""
         if self.mixer:
             self.mixer.send(path, value)
+
+    def _can_send(self):
+        return bool(self.active and not self.feature("safe_mode") and self.mixer)
+
+    # ------------------------------------------------------------ ramp
+    def _fader_now(self, path):
+        """Aa fader path nu atyar nu value (mixer parthi vanchelu)."""
+        if not path:
+            return None
+        parts = path.split("/")
+        try:
+            if path.startswith("/dca/"):
+                return self.dca_fader.get(int(parts[2]))
+            if path.startswith("/ch/"):
+                return self.ch_fader.get(int(parts[2]))
+        except (ValueError, IndexError):
+            return None
+        return None
+
+    def _note_fader(self, path, value):
+        """
+        Aapne j je fader moklyo te aapni yaadi ma pan lakhi do.
+
+        Aa jaruri chhe -- nahi to aapne moklyu 0 dB, pan yaadi ma haju
+        junu -20 dB hoy, ane pachhi "engineer e hathe badlyu" evu KHOTU
+        lagé. (aa asli bug hato, test ma pakadayo)
+        """
+        parts = path.split("/")
+        try:
+            if path.startswith("/dca/"):
+                self.dca_fader[int(parts[2])] = float(value)
+            elif path.startswith("/ch/"):
+                self.ch_fader[int(parts[2])] = float(value)
+        except (ValueError, IndexError):
+            pass
+
+    def _ramping(self, path):
+        """Aa fader atyare chalu ramp ma chhe?"""
+        return any(r["path"] == path for r in self._ramps)
+
+    def _ramp(self, path, frm, to, ms=250):
+        """Fader ne dhime dhime ek value thi biji par lai javo (click na thay)."""
+        if not self._can_send() or not path:
+            return
+        frm = 0.75 if frm is None else float(frm)
+        to = float(to)
+        if ms and ms > 0 and abs(to - frm) > 0.001:
+            self._ramps = [r for r in self._ramps if r["path"] != path]
+            self._ramps.append({"path": path, "a": frm, "b": to,
+                                "t0": time.monotonic(), "dur": ms / 1000.0})
+        else:
+            self.mixer.send(path, to)
+            self._note_fader(path, to)
+
+    def _run_ramps(self, mono):
+        """Dar chakkar par -- chalu ramp ane 'pachhi karvanu' kaam."""
+        if self._ramps:
+            keep = []
+            for r in self._ramps:
+                frac = 1.0 if r["dur"] <= 0 else (mono - r["t0"]) / r["dur"]
+                if frac >= 1.0:
+                    self.mixer.send(r["path"], r["b"])
+                    self._note_fader(r["path"], r["b"])
+                else:
+                    val = r["a"] + (r["b"] - r["a"]) * frac
+                    self.mixer.send(r["path"], val)
+                    self._note_fader(r["path"], val)
+                    keep.append(r)
+            self._ramps = keep
+        if self._later:
+            due = [x for x in self._later if x[0] <= mono]
+            if due:
+                self._later = [x for x in self._later if x[0] > mono]
+                for _t, path, val in due:
+                    self.mixer.send(path, val)
+
+    # ------------------------------------------------------------ R12 fader
+    def _fader_boost(self, audible):
+        """
+        Unmute thay tyare fader 0 dB par lai javo,
+        mute thay tyare je hato tya PACHHO lai javo.
+            dakhla:  -20 dB  ->  unmute ->  0 dB
+                       0 dB  ->  mute   -> -20 dB
+        """
+        if not self.feature("fader_boost") or not self._can_send():
+            return
+        path = self.fb.get("target")
+        cur = self._fader_now(path)
+        if cur is None:
+            return
+        to_db = float(self.fb.get("to_db", 0.0))
+        tol = float(self.fb.get("tolerance_db", 1.0))
+        ms = int(self.fb.get("ramp_ms", 250) or 0)
+        label = core.target_label(path) or path
+
+        if audible:
+            # ---- unmute : 0 dB thi niche hoy to j upar lai javo ----
+            if core.fader_to_db(cur) >= to_db - tol:
+                self._fb_saved = None          # pehlethi barabar chhe
+                return
+            self._fb_saved = cur
+            val = core.db_to_fader(to_db)
+            self._fb_set = val
+            self._ramp(path, cur, val, ms)
+            self.on_log("Fader: %s  %.1f dB -> %.1f dB"
+                        % (label, core.fader_to_db(cur), to_db))
+        else:
+            # ---- mute : je hato tya pachho ----
+            if self._fb_saved is None:
+                return
+            # engineer e vachche hathe badlyu hoy to teni sathe na ladvu
+            # (ramp haju chalu hoy to e aapnu j kaam chhe -- guard na lagavo)
+            if (self._fb_set is not None and not self._ramping(path)
+                    and abs(float(cur) - self._fb_set) > 0.02):
+                self.on_log("Fader: %s hathe badlayo -- pachho nathi lai jato"
+                            % label)
+                self._fb_saved = self._fb_set = None
+                return
+            self._ramp(path, cur, self._fb_saved, ms)
+            self.on_log("Fader: %s  %.1f dB -> %.1f dB (pachho)"
+                        % (label, core.fader_to_db(cur),
+                           core.fader_to_db(self._fb_saved)))
+            self._fb_saved = self._fb_set = None
+
+    # ------------------------------------------------------------ R11 switch
+    def _source_on(self, src, audible):
+        for p in src.targets:
+            self.mixer.send(p, core.mute_value(p, audible, self.invert))
+            time.sleep(0.002)
+
+    def _switch_apply(self, act):
+        """
+        Switch ne kharekhar mixer par lagavo.
+
+        MAKE-BEFORE-BREAK : pehla NAVU chalu, pachhi JUNU band.
+        Etle vachche ek pan kshan mate awaaj band nathi thato.
+        """
+        if not self._can_send():
+            return
+        to, frm = act["to"], act["from"]
+        mono = time.monotonic()
+        xf = float(self.switcher.opts.get("crossfade_ms", 250) or 0)
+        ov = float(self.switcher.opts.get("overlap_ms", 150) or 0) / 1000.0
+
+        # ---- 1) NAVU chalu (pehla) ----
+        # (stereo pair hoy to BADHA target -- L ane R banne)
+        self._source_on(to, True)
+        for fp in (to.faders or []):
+            cur = self._fader_now(fp)
+            lvl = 0.75 if to.on_level is None else float(to.on_level)
+            self._ramp(fp, cur, lvl, xf)
+
+        # ---- 2) JUNU band (overlap pachhi) ----
+        others = [frm] if frm is not None else [
+            s for s in self.switcher.active_sources() if s is not to]
+        for old in others:
+            if old is None or old is to:
+                continue
+            delay = ov
+            for fp in (old.faders or []):
+                cur = self._fader_now(fp)
+                if cur is not None and old.on_level is None:
+                    old.on_level = cur          # kya hato te yaad rakho
+                self._ramp(fp, cur, 0.0, xf)
+                delay = max(ov, xf / 1000.0)
+            for p in old.targets:
+                self._later.append(
+                    (mono + delay, p, core.mute_value(p, False, self.invert)))
 
     # ------------------------------------------------------------ fader
     def channel_gain_db(self, ch):
@@ -326,9 +577,14 @@ class Engine(threading.Thread):
 
             respect = self.feature("respect_fader")
 
+            # AAKHA bank na level (CH + Aux In + FX Rtn + Bus + Matrix)
+            n_all = min(core.METER_COUNT, len(values))
+            for i in range(n_all):
+                self.all_levels[i] = core.to_db(values[i])
+
             # badhi 32 channel na level (GUI ne batavva mate)
             for i in range(min(NUM_CHANNELS, len(values))):
-                raw = core.to_db(values[i])
+                raw = self.all_levels[i]
                 self.levels[i] = raw
                 if respect:
                     gain = self.channel_gain_db(i + 1)
@@ -342,10 +598,26 @@ class Engine(threading.Thread):
                 indexes = list(self.indexes)
             best_db, best_i = -128.0, None
             for i in indexes:
-                if i < len(values):
-                    db = self.levels_eff[i] if respect else core.to_db(values[i])
-                    if db > best_db:
-                        best_db, best_i = db, i
+                if i >= n_all:
+                    continue
+                # CH 1-32 mate fader/mute dhyanma levay chhe. Aux In /
+                # FX Return / Bus / Matrix na fader ni khabar nathi, etle
+                # tena mate KACHO level j vaparvo (ane crash pan na thay).
+                if respect and i < NUM_CHANNELS:
+                    db = self.levels_eff[i]
+                else:
+                    db = self.all_levels[i]
+                if db > best_db:
+                    best_db, best_i = db, i
+
+            # ---- R11 : switcher ne KACHO level aapo (levels_eff nahi!) ----
+            # AAKHU list aapvu -- fakt 32 nahi. Etle Aux In (32-39),
+            # FX Return (40-47), Bus (48-63), Matrix (64-69) pan source
+            # bani shake.
+            # [:n_all] = mixer e KHAREKHAR jetli value aapi hoy tetli j.
+            # Vadhare na aapvi -- nahi to jena meter j nathi aavta te
+            # index "-128 dB = line mari gai" lagé ane khoto switch thay.
+            self.switcher.feed(self.all_levels[:n_all], now=time.monotonic())
 
             if best_i is None:
                 if not self._warned_range:
@@ -359,8 +631,18 @@ class Engine(threading.Thread):
     # ------------------------------------------------------------ logic
     def _update(self):
         now = time.time()
+        mono = time.monotonic()
         with self._lock:
             threshold, hold, attack = self.threshold, self.hold, self.attack
+
+        # ---- R11 : Smart Source Switch ----
+        # (monotonic vaaparyu chhe -- Windows no clock kudé to pan
+        #  3 minute no timer khoto na thay)
+        act = self.switcher.tick(mono)
+        if act:
+            self._switch_apply(act)
+        if self.mixer:
+            self._run_ramps(mono)
 
         # "Auto FX Mute" band hoy to jate kai badlvu nahi
         if not self.feature("auto_fx"):
@@ -427,6 +709,8 @@ class Engine(threading.Thread):
             "packets": self.packets,
             "names": dict(self.names),
             "data_age": time.time() - self.last_packet if self.last_packet else 999.0,
+            "switch": self.switcher.snapshot(time.monotonic()),
+            "fader_boost_saved": self._fb_saved,
         }
 
     # ------------------------------------------------------------ run
@@ -450,6 +734,7 @@ class Engine(threading.Thread):
         self._last_state_poll = time.time()
         self.mixer.subscribe_meters([self.bank])
         self.last_packet = time.time()
+        self.switcher.set_features(self.features)
 
         last_status = 0.0
         while not self._stop_flag.is_set():
@@ -499,3 +784,4 @@ class Engine(threading.Thread):
             self._apply(False, "Band karu chhu")
         self.mixer.close()
         self.on_log("Engine band thai gayu.")
+        self._close_log()

@@ -35,8 +35,8 @@ DATA_FILES = [
 # aa module code ma andar thi import thay chhe, etle hathe kahevu pade
 HIDDEN = [
     "m32_gui", "m32_automation", "m32_engine", "m32_core", "osc_lite",
-    "m32_simulator", "find_mixer", "meter_scan", "channel_select",
-    "test_fx", "test_all",
+    "m32_switcher", "m32_simulator", "find_mixer", "meter_scan",
+    "channel_select", "test_fx", "test_all",
 ]
 
 

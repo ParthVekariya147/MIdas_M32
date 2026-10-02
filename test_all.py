@@ -13,18 +13,35 @@ Chalavva:  9-TEST-ALL.bat  par double-click
 Athva:     python test_all.py
 """
 
+import os
 import sys
 import time
 
 import m32_core as core
 import m32_engine
 import m32_simulator
+import m32_switcher
 import osc_lite
 
 core.setup_console()
 
 LINE = "=" * 66
 PASS, FAIL = [], []
+
+# Test vakhte kharekhar nu automation.log na bagadvu. (Log no potano
+# test niche chhe -- te alag file vaapre chhe.)
+core.DEFAULTS["log_file"] = ""
+
+_real_load_config = core.load_config
+
+
+def _load_config_no_log():
+    cfg = _real_load_config()
+    cfg["log_file"] = ""
+    return cfg
+
+
+core.load_config = _load_config_no_log
 
 
 # ---------------------------------------------------------------- helpers
@@ -422,9 +439,16 @@ def test_gui():
               core.channel_names(app._selected_indexes()))
 
         # ---- toggle button ----
-        check("badha feature na toggle banya",
-              len(app.feat_vars) == len(core.FEATURES) - 1,
-              "%d toggle" % len(app.feat_vars))
+        # auto_fx = niche nu MOTU toggle, etle feat_vars ma nathi.
+        # switch_* wala biji tab (Smart Switch) ma chhe -- pan feat_vars
+        # ma to hova j joiye, nahi to save thay nahi.
+        want = set(core.FEATURES) - {"auto_fx"}
+        missing = sorted(want - set(app.feat_vars))
+        check("badha feature na toggle banya", not missing,
+              "%d toggle%s" % (len(app.feat_vars),
+                               ("  KHUTE CHHE: " + ", ".join(missing))
+                               if missing else ""))
+        check("Smart Switch nu toggle chhe", "auto_switch" in app.feat_vars)
 
         v = tk.BooleanVar(value=False)
         tog = m32_gui.Toggle(root, variable=v)
@@ -462,6 +486,357 @@ def test_gui():
         check("GUI banyu", False, "%s: %s" % (type(e).__name__, e))
 
 
+# ================================================================ 6. Switch
+def _katha(seed=11):
+    """Nakli katha: vakta bole chhe, vachche vishram le chhe."""
+    import random
+    rnd = random.Random(seed)
+
+    def speech(t, quiet=None):
+        if quiet and quiet[0] <= t < quiet[1]:
+            return -70.0 + rnd.uniform(-1, 1)      # vishram, line jivti
+        return -40.0 + rnd.uniform(-12, 6)         # bole chhe
+    return speech
+
+
+def _run(ctl, t0, t1, zoom, aux, step=0.05):
+    t = t0
+    while t < t1:
+        ctl.feed({8: zoom(t), 12: aux(t)}, now=t)
+        ctl.tick(now=t)
+        t += step
+    return t
+
+
+def _ctl(**over):
+    cfg = {"stable_s": 5.0, "min_dwell_s": 2.0, "pause_wait_s": 4.0,
+           "sources": [
+               {"name": "Zoom (PC)", "index": 8, "targets": ["/ch/09/mix/on"]},
+               {"name": "Aux 1", "index": 12, "targets": ["/auxin/01/mix/on"]}]}
+    cfg.update(over)
+    c = m32_switcher.SwitchController()
+    c.configure(cfg)
+    c.set_features({"auto_switch": True})
+    return c
+
+
+DEAD_LINE = -95.0
+
+
+def test_switch():
+    section("6. Smart Source Switch (be Zoom)")
+    sp = _katha()
+
+    # ---- vakta atke to switch NA thavo joiye (sauthi agatya no test) ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    first = c.live.name
+    _run(c, 3, 9, lambda t: sp(t, (3, 8)), lambda t: sp(t, (3, 8)))
+    check("vakta 5 sec atke to switch NA thay", c.live.name == first,
+          "live = %s" % c.live.name)
+
+    # ---- line mari jay to switch thavo joiye ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 3, 12, lambda t: DEAD_LINE, lambda t: sp(t))
+    check("line mari jay to Aux par switch thay", c.live.name == "Aux 1",
+          "live = %s" % c.live.name)
+
+    # ---- cross-check thi jaldi switch thay ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 3, 12, lambda t: DEAD_LINE, lambda t: sp(t))
+    took = c.last_switch - 3.0
+    check("cross-check thi jaldi (5 sec ni ander)", took < 5.0,
+          "%.1f second ma switch thayu" % took)
+
+    # ---- cross-check band hoy to dhime, pan thay to khari ----
+    c = _ctl()
+    c.set_features({"auto_switch": True, "switch_cross_check": False})
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 3, 18, lambda t: DEAD_LINE, lambda t: sp(t))
+    check("cross-check band: dhime pan switch thay", c.live.name == "Aux 1",
+          "%.1f second" % (c.last_switch - 3.0))
+
+    # ---- sthir thay pachhi j pachha javu ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 3, 12, lambda t: DEAD_LINE, lambda t: sp(t))
+    _run(c, 12, 15, lambda t: sp(t), lambda t: sp(t))
+    early = c.live.name
+    _run(c, 15, 26, lambda t: sp(t), lambda t: sp(t, (20, 22)))
+    check("3 sec ma pachha NA jay (sthirta baaki)", early == "Aux 1", early)
+    check("sthir thay pachhi Zoom par pachha", c.live.name == "Zoom (PC)",
+          "live = %s" % c.live.name)
+
+    # ---- vachche fari tute to timer 0 thi ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 3, 12, lambda t: DEAD_LINE, lambda t: sp(t))
+    _run(c, 12, 15, lambda t: sp(t), lambda t: sp(t))
+    _run(c, 15, 24, lambda t: DEAD_LINE, lambda t: sp(t))
+    _run(c, 24, 28, lambda t: sp(t), lambda t: sp(t))
+    check("vachche fari tute to timer 0 thi", c.live.name == "Aux 1",
+          "haju Aux par j chhe (sacchu)")
+
+    # ---- banne mari jay to KAI na thay ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    n0 = c.switch_count
+    _run(c, 3, 20, lambda t: DEAD_LINE, lambda t: DEAD_LINE)
+    check("banne mari jay to kai na thay", c.switch_count == n0,
+          "switch = %d" % (c.switch_count - n0))
+
+    # ---- 1 j source hoy to chale j nahi ----
+    c = _ctl(sources=[{"name": "Zoom", "index": 8,
+                       "targets": ["/ch/09/mix/on"]}])
+    ok, why = c.ready()
+    check("1 j source hoy to chalu na thay", not ok, why)
+
+    # ---- sapat hum ne awaaj na ganvo (1-2 dB walo prashn) ----
+    s1 = m32_switcher.Source({"name": "x", "index": 0},
+                             m32_switcher.defaults())
+    t = 0.0
+    while t < 3.0:                       # -50 dB, pan sav sapat
+        s1.feed(-50.0 + (0.5 if int(t * 10) % 2 else -0.5), t, True)
+        t += 0.05
+    check("sapat hum ne awaaj na ganyo", not s1.alive,
+          "wiggle = %.1f dB" % s1.wiggle())
+
+    s2 = m32_switcher.Source({"name": "y", "index": 0},
+                             m32_switcher.defaults())
+    t = 0.0
+    while t < 3.0:                       # e j level, pan vadhghat sathe
+        s2.feed(-50.0 + (12.0 if int(t * 4) % 2 else -8.0), t, True)
+        t += 0.05
+    check("vadhghat wala ne awaaj ganyo", s2.alive,
+          "wiggle = %.1f dB" % s2.wiggle())
+
+    # ---- data band thay to freeze ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    n0 = c.switch_count
+    for i in range(20):
+        c.tick(now=3.0 + i * 0.5)        # feed() nathi -- data band
+    check("data band thay to switch na kare",
+          c.switch_count == n0 and c.frozen, "frozen = %s" % c.frozen)
+
+    # ---- HOLD dabave to kai na thay ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    c.set_hold(True)
+    n0 = c.switch_count
+    _run(c, 3, 14, lambda t: DEAD_LINE, lambda t: sp(t))
+    check("HOLD dabave to switch na thay", c.switch_count == n0)
+
+    # ---- shuruaat thi j line mareli hoy to pan pakdai javi joiye ----
+    # (aa bug kharaa M32 par pakadayo hato -- 2 second ni itihas baari
+    #  ne lidhe "line mari" kyarey thatu j nahi)
+    c = _ctl()
+    _run(c, 0, 12, lambda t: DEAD_LINE, lambda t: sp(t))
+    zoom = c.sources[0]
+    check("shuruaat thi j mareli line pakdai", zoom.state == "DEAD",
+          "halat = %s, chup = %.1f s" % (zoom.state, zoom.quiet_for(12.0)))
+    check("shuruaat thi mareli hoy to Aux par jay", c.live.name == "Aux 1",
+          "live = %s" % c.live.name)
+
+    # ---- STEREO PAIR : ek source ma be channel (L ane R) ----
+    c = m32_switcher.SwitchController()
+    c.configure({"stable_s": 5.0, "min_dwell_s": 2.0, "sources": [
+        {"name": "Zoom", "indexes": [13], "targets": ["/ch/14/mix/on"]},
+        {"name": "Photo Video", "indexes": [30, 31],
+         "targets": ["/ch/31/mix/on", "/ch/32/mix/on"],
+         "faders": ["/ch/31/mix/fader", "/ch/32/mix/fader"]}]})
+    c.set_features({"auto_switch": True})
+    pv = c.sources[1]
+    check("stereo pair: be index sambhalay", pv.indexes == [30, 31],
+          str(pv.indexes))
+    check("stereo pair: be target mute thashe", len(pv.targets) == 2,
+          ", ".join(pv.targets))
+    check("stereo pair: be fader ramp thashe", len(pv.faders) == 2,
+          ", ".join(pv.faders))
+
+    # L chup pan R ma awaaj -> source "bole chhe" ganvi joiye
+    t = 0.0
+    while t < 3.0:
+        c.feed({13: DEAD_LINE, 30: -120.0, 31: sp(t)}, now=t)
+        c.tick(now=t)
+        t += 0.05
+    check("be ma thi ek ma awaaj hoy to pan pakdai jay",
+          pv.state == "TALKING", "halat = %s, %.1f dB" % (pv.state, pv.db))
+
+    # ---- juni config (index) pan chalvi joiye ----
+    c2 = m32_switcher.SwitchController()
+    c2.configure({"sources": [{"name": "a", "index": 7, "targets": ["/x"]},
+                              {"name": "b", "index": 9, "targets": ["/y"]}]})
+    check("juni config ('index') pan chale", c2.sources[0].indexes == [7],
+          str(c2.sources[0].indexes))
+
+    # ---- be source ek j channel na sambhale ----
+    c3 = m32_switcher.SwitchController()
+    c3.configure({"sources": [
+        {"name": "a", "indexes": [30, 31], "targets": ["/x"]},
+        {"name": "b", "indexes": [31], "targets": ["/y"]}]})
+    ok3, why3 = c3.ready()
+    check("be source ek j channel na sambhale", not ok3, why3)
+
+    # ---- hathe switch kari shakay ----
+    c = _ctl()
+    _run(c, 0, 3, lambda t: sp(t), lambda t: sp(t))
+    c.force_switch("Aux 1", now=3.0)
+    check("hathe switch kari shakay", c.live.name == "Aux 1")
+
+
+# ================================================================ 7. R12
+def test_fader_boost():
+    section("7. Fader jate 0 dB par ane pachho (R12)")
+    check("0 dB no fader value 0.75 chhe",
+          abs(core.db_to_fader(0.0) - 0.75) < 1e-9,
+          "%.4f" % core.db_to_fader(0.0))
+    ok = all(abs(core.fader_to_db(core.db_to_fader(d)) - d) < 0.01
+             for d in (10, 0, -5, -20, -30, -60, -90))
+    check("dB -> fader -> dB pachhu e j aave", ok)
+
+    sim = m32_simulator.Simulator(verbose=False)
+    sim.start()
+    sim.ready.wait(2.0)
+    if sim.error:
+        check("nakli mixer chalu thayo", False, str(sim.error))
+        return
+    try:
+        sim.state["/dca/8/fader"] = core.db_to_fader(-20.0)
+        cfg = dict(core.DEFAULTS)
+        # CH 1 = Guruji (3.5 s gaay / 2.5 s shant) -- hold 0.8 s karta
+        # shanti lambi chhe, etle MUTE chokkas thashe (test bharoso patra)
+        cfg.update({"mixer_ip": "127.0.0.1", "mixer_port": 10023,
+                    "meter_index": 0, "fx_targets": ["/config/mute/1"],
+                    "threshold_db": -40.0, "hold_time": 0.8,
+                    "attack_time": 0.02})
+        cfg["features"] = dict(core.feature_defaults())
+        cfg["features"].update({"fader_boost": True, "respect_fader": False,
+                                "auto_fx": True, "start_muted": False})
+        cfg["fader_boost"] = {"target": "/dca/8/fader", "to_db": 0.0,
+                              "tolerance_db": 1.0, "ramp_ms": 100}
+        eng = m32_engine.Engine(cfg)
+        eng.start()
+        time.sleep(1.5)
+        eng.set_active(True)
+
+        up = wait_for(lambda: core.fader_to_db(
+            sim.state.get("/dca/8/fader")) > -1.0, 10.0)
+        check("unmute thay to fader 0 dB par gayo", up,
+              "%.1f dB" % core.fader_to_db(sim.state.get("/dca/8/fader")))
+
+        back = wait_for(lambda: core.fader_to_db(
+            sim.state.get("/dca/8/fader")) < -19.0, 10.0)
+        check("mute thay to fader -20 dB par pachho", back,
+              "%.1f dB" % core.fader_to_db(sim.state.get("/dca/8/fader")))
+
+        eng.request_stop()
+        eng.join(timeout=2.0)
+    finally:
+        sim.request_stop()
+        time.sleep(0.3)
+
+
+# ================================================================ 8. meter
+def test_meter_all():
+    section("8. Aakha bank na meter (Aux In / Bus pan source bani shake)")
+
+    check("METER_COUNT = 70", core.METER_COUNT == 70,
+          "bank 0 ni badhi value (CH+Aux+FX+Bus+Mtx)")
+
+    cfg = dict(core.DEFAULTS)
+    cfg["meter_index"] = 32                     # Aux In 1 -- CH 32 pachhi
+    cfg["features"] = dict(core.feature_defaults(), auto_switch=True)
+    cfg["auto_switch"] = dict(core.switch_defaults(), sources=[
+        {"name": "Aux In 1", "on": True, "index": 32,
+         "targets": ["/auxin/01/mix/on"]},
+        {"name": "CH 1", "on": True, "index": 0,
+         "targets": ["/ch/01/mix/on"]},
+    ])
+
+    # mixer ni jarur nathi -- engine ne sidho nakli meter packet aapiye
+    eng = m32_engine.Engine(cfg)
+    check("all_levels 70 lamba chhe", len(eng.all_levels) == core.METER_COUNT,
+          "%d" % len(eng.all_levels))
+
+    vals = [-90.0] * core.METER_COUNT
+    vals[32] = -12.0                            # Aux In 1 ma motho awaaj
+    eng._on_packet("/meters/0", [m32_simulator.make_blob(vals)])
+
+    check("Aux In 1 (index 32) no level engine ne malyo",
+          abs(eng.all_levels[32] + 12.0) < 0.5,
+          "%.1f dB" % eng.all_levels[32])
+
+    aux = eng.switcher.sources[0]
+    check("Smart Switch ne CH 32 pachhi no level malyo",
+          abs(aux.db + 12.0) < 0.5, "%s = %.1f dB" % (aux.name, aux.db))
+    check("etli source 'jivti' ganai", aux.alive is True,
+          "state %s" % aux.state)
+
+    check("Auto FX e pan te level vaapryo (crash nahi)",
+          eng.active_index == 32 and abs(eng.level_db + 12.0) < 0.5,
+          "index %d, %.1f dB" % (eng.active_index, eng.level_db))
+
+    # mixer ochhi value aape to jena meter j nathi aavta te index ne
+    # "mari gai" na manvu -- fakt "khabar nathi"
+    eng2 = m32_engine.Engine(cfg)
+    eng2._on_packet("/meters/0", [m32_simulator.make_blob([-90.0] * 32)])
+    a2 = eng2.switcher.sources[0]
+    check("fakt 32 value aave to CH 32 pachhi nu 'khabar nathi' rahe",
+          not a2.started and a2.db == -128.0, "db %.1f" % a2.db)
+
+
+# ================================================================ 9. log
+def test_logging():
+    section("9. Log file lakhvu ('logging' toggle)")
+
+    name = "test-log-check.log"
+    path = os.path.join(core.HERE, name)
+    if os.path.exists(path):
+        os.remove(path)
+
+    def txt():
+        if not os.path.exists(path):
+            return ""
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    cfg = dict(core.DEFAULTS)
+    cfg["log_file"] = name
+    seen = []
+    eng = m32_engine.Engine(cfg, on_log=seen.append)
+    try:
+        eng.on_log("pehli line")
+        check("log file jate bani ane lakhai", "pehli line" in txt(), name)
+        check("sathe screen par pan gayu", seen == ["pehli line"])
+
+        eng.set_feature("logging", False)
+        eng.on_log("aa na lakhavi joiye")
+        check("'logging' BAND karo to file ma na jay",
+              "aa na lakhavi joiye" not in txt())
+        check("pan screen par to dekhay", "aa na lakhavi joiye" in seen)
+
+        eng.set_feature("logging", True)
+        eng.on_log("fari chalu")
+        check("fari CHALU karo to pachhu lakhay (restart vagar)",
+              "fari chalu" in txt())
+    finally:
+        eng._close_log()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    # log_file khali hoy to kai file na banavvi
+    cfg2 = dict(core.DEFAULTS)
+    cfg2["log_file"] = ""
+    eng2 = m32_engine.Engine(cfg2)
+    eng2.on_log("kai file nathi")
+    check("log_file khali hoy to kai na lakhay", eng2.log_path == "")
+
+
 # ================================================================ main
 def main():
     print(LINE)
@@ -471,7 +846,8 @@ def main():
 
     start = time.time()
     for fn in (test_osc, test_db, test_config, test_features, test_fader,
-               test_live, test_gui):
+               test_live, test_switch, test_fader_boost, test_meter_all,
+               test_logging, test_gui):
         try:
             fn()
         except Exception as e:
